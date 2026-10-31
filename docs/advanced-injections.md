@@ -33,7 +33,8 @@ macros elsewhere are preserved (see the macro section).
 
 A RETURN modifier moves only the exit values (each `return` operand and the
 function tail) into its helper's argument; the rest of the body is untouched.
-So, elsewhere in the body, RETURN allows:
+So, elsewhere in the body, RETURN allows the first of these, and anywhere,
+the second:
 
 - a call beneath a reference, such as `decode(Some(&Tag::Compound(all)))` in a
   statement or `let x = &make();` whose temporary is extended: it keeps its
@@ -44,7 +45,10 @@ So, elsewhere in the body, RETURN allows:
   refused. Locals declared inside a closure do not count toward capture ordinals:
   `$local_ref:later:0` is the first `later` of the function itself.
 
-Inside an exit value both stay `E_UNSUPPORTED_CONTROL_FLOW`. A target that also
+A plain closure inside an exit value, such as the tail
+`xs.iter().map(|x| x * 2).sum()`, moves into the helper's argument with the
+value; its own `return` is still not an exit. A call beneath a reference inside
+an exit value stays `E_UNSUPPORTED_CONTROL_FLOW`. A target that also
 has an interior hook (BEFORE_CALL, AFTER_CALL, value and variable modifiers)
 keeps the check over the whole body for that hook, since it rewrites there.
 

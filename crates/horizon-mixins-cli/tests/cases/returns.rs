@@ -85,8 +85,6 @@ fn return_hooks_still_refuse_references_to_calls_and_closures_in_the_values_they
         "if early { return *&sink(1); } sink(2)",
         "if early { return sink(1); } *&sink(2)",
         "if early { return sink(1); } { let x = &Guard::new(\"tail\", 2); size(x) }",
-        "if early { return sink(1); } (|| sink(2))()",
-        "if early { return (|| sink(1))(); } sink(2)",
     ] {
         let f = fixture(body);
         let e = build_plan(&f.root, &f.mods).unwrap_err();
@@ -95,10 +93,12 @@ fn return_hooks_still_refuse_references_to_calls_and_closures_in_the_values_they
             assert!(e.message.contains("beneath a reference"), "{body}: {e}");
         }
     }
-    // What a closure holds is still checked: `?` and async stay refused.
+    // What a closure holds is still checked, also in an exit value: `?` and async stay refused.
     for body in [
         "let f = || -> Option<i32> { Some(1)?; None }; sink(f().unwrap_or(2))",
         "let f = async || 1; drop(f); sink(2)",
+        "if early { return (|| -> Option<i32> { Some(1)?; None })().unwrap_or(1); } sink(2)",
+        "if early { return sink(1); } { let f = async || 1; drop(f); sink(2) }",
     ] {
         let f = fixture(body);
         let e = build_plan(&f.root, &f.mods).unwrap_err();
@@ -162,6 +162,38 @@ bindings=[{name="value",ty="i32",value="$value"},{name="later",ty="&i32",value="
 fn the_outer_local_is_captured() {
     assert_eq!(fixture_game::run(false), 303);
     assert_eq!(fixture_game::run(true), 303);
+}
+"#,
+    )
+    .unwrap();
+    f.run("check");
+}
+
+#[test]
+fn return_hooks_move_closures_in_exit_values_with_the_value() {
+    // A closure in a `return` operand and in the tail moves into the helper's argument with the
+    // value. The first one's own `return` leaves the closure and is not an exit of `run`.
+    let f = fixture(
+        r#"
+        let base = sink(2);
+        if early { return [1, 2].iter().map(|n| { if *n > 1 { return n * 100; } n + base }).sum(); }
+        mark("body");
+        [3, 4].map(|n| n * base).iter().copied().sum::<i32>() + (|| sink(1))()
+    "#,
+    );
+    fs::write(
+        f.root.join("driver/src/lib.rs"),
+        r#"
+#[test]
+fn the_helper_sees_each_exit_value_once() {
+    use fixture_game::{run, LOG};
+    // 1 + 2, then the closure's own `return` 200: 203, plus the helper's 1.
+    assert_eq!(run(true), 204);
+    assert_eq!(*LOG.lock().unwrap(), ["helper"]);
+    LOG.lock().unwrap().clear();
+    // 6 + 8 + 1, plus the helper's 1.
+    assert_eq!(run(false), 16);
+    assert_eq!(*LOG.lock().unwrap(), ["body", "helper"]);
 }
 "#,
     )

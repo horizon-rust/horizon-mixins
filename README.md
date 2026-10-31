@@ -80,7 +80,7 @@ zero-based `ordinal`. It supports a complete expression statement, plain `let`
 initializer, or block/function tail. Calls nested in larger expressions are
 rejected because wrapping them can change temporary drop timing. For BEFORE_CALL, macro
 sites, unresolved cfg, async/closures/`?`, generic/unsafe/const targets, and
-ambiguous source identities are rejected (RETURN allows closures and references to
+ambiguous source identities are rejected (RETURN allows plain closures, and references to
 calls outside the values it returns, and MODIFY_VARIABLE closures, `?` and references
 to calls outside the value it modifies). Rust checks privacy, types and borrowing in
 `check`; successful planning alone does not guarantee compilation.

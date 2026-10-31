@@ -972,9 +972,10 @@ const CLOSURES_ETC: (&str, &str) = (
     "closures, async, try/?, unsafe and const blocks are unsupported injection contexts",
 );
 /// What RETURN refuses in the values it moves into a helper argument: each `return` operand
-/// and the body's tail. A call beneath a reference there could change temporary lifetimes, and
-/// a closure there is refused as before. Closures elsewhere are left alone: a `return` inside
-/// one leaves the closure, not the target, and RETURN does not rewrite it.
+/// and the body's tail. A call beneath a reference there could change temporary lifetimes. A
+/// plain closure there moves into the argument with the value, and what it holds is not part of
+/// that value: a `return` inside it leaves the closure, and RETURN does not rewrite it. The
+/// whole-body check still refuses async closures and `?` or unsafe inside any closure.
 fn exit_value_error(block: &syn::Block) -> Option<(&'static str, &'static str)> {
     struct Find {
         exits: usize,
@@ -983,7 +984,6 @@ fn exit_value_error(block: &syn::Block) -> Option<(&'static str, &'static str)> 
     impl<'ast> Visit<'ast> for Find {
         fn visit_expr(&mut self, e: &'ast Expr) {
             match e {
-                Expr::Closure(_) if self.exits > 0 => self.error = Some(CLOSURES_ETC),
                 Expr::Closure(_) => return,
                 Expr::Return(r) => {
                     self.exits += 1;
