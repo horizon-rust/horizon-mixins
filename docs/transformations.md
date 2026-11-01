@@ -69,7 +69,7 @@ Value modifiers use a scoped function-item callee with original values as
 ordinary call arguments, avoiding an added block around original expressions.
 Operation wrappers use typed, generated FnOnce continuations. Return modifiers
 run on explicit exits, implicit tails and cancelled HEAD results; generated
-helper/continuation returns are not revisited. Current schema-5 plans store
+helper/continuation returns are not revisited. Current schema-7 plans store
 value/output contracts, argument indices and original constant coordinates,
 plus lexical/access identities, captures, resolved regions and bridge metadata.
 Regenerate older plans after upgrading.

@@ -1,6 +1,6 @@
 # Lifetime methods, boundary HEAD hooks and support modules (0.4.0)
 
-Veinminer is the first full-game consumer of this extension. Plans use schema 5;
+Veinminer is the first full-game consumer of this extension. Plans use schema 7;
 regenerate older plans. It declares three cancellable HEAD injections and one
 support module. All changes to the exported Horizon Rust source are performed
 by the mixin planner/transformer and atomic staging CLI.
@@ -126,7 +126,7 @@ Cargo; injected helpers are never matched against that code.
 
 Plans contain module identity/version, destination fingerprint and source, plus
 `visibility = "pub"` for public modules. Omitted plan visibility means
-`pub(crate)`, preserving existing schema-5 module records and generated output.
+`pub(crate)`; regenerated plans keep this default and generated output unchanged.
 Original fingerprints are checked before function rewrites; module insertion
 happens afterward so original node paths cannot shift. Changed support code
 changes the plan and staged file; repeated identical runs preserve bytes and
