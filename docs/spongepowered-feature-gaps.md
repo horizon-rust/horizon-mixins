@@ -1,7 +1,7 @@
 # SpongePowered Mixin feature map and remaining work
 
-Status: Horizon Mixins 0.6.0. This is a capability comparison and design backlog,
-not Java annotation, bytecode or mod compatibility. The implementation uses Rust
+Status: Horizon Mixins 0.6.0 with schema-7 same-bundle crate edges. This is a
+capability comparison and design backlog, not Java annotation, bytecode or mod compatibility. The implementation uses Rust
 source before Cargo compilation; Sponge Mixin integrates Java bytecode with the
 runtime classloading pipeline. [Sponge overview](https://github.com/SpongePowered/Mixin/blob/master/README.MD).
 

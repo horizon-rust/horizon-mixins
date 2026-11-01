@@ -11,7 +11,7 @@ expression, receiver or argument is duplicated. Generated functions remain in
 the target crate. Body-rewriting operations retain macro/cfg/async/closure/try/generic safety
 checks. HEAD permits preserved body control flow as specified in
 [boundary-head-and-modules.md](boundary-head-and-modules.md). Generated operation continuations are the compilation-tested exception
-to the source-closure restriction. Current plans use schema 5; older plans must
+to the source-closure restriction. Current plans use schema 7; older plans must
 be regenerated. Function definitions and bindings beginning `__horizon_mixins_`
 are reserved; references to generated bridge APIs are allowed.
 
@@ -89,7 +89,7 @@ argument modifiers at their original sites) → tuple modifiers → wrapper chai
 BEFORE_CALL hooks at a wrapped call still execute before receiver/argument
 evaluation. RETURN transformation and generated code are never revisited for
 selector matching. The integration suite compiles positive/negative examples, checks composition
-and order, and snapshots the generated source and schema-5 plan.
+and order, and snapshots the generated source and schema-7 plan.
 
 ## Run the complete fixture
 

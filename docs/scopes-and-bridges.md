@@ -2,7 +2,7 @@
 
 Version 0.3.0 implements lexical local capture, accessor/invoker bridges,
 original-source slices, MODIFY_ARGS and MODIFY_VARIABLE. The baseline and
-advanced fixtures continue to pass. Plans use schema 5; regenerate older plans.
+advanced fixtures continue to pass. Plans use schema 7; regenerate older plans.
 
 Run the two-mod fixture containing 25 injections, nine bridges and eight runtime
 tests:
@@ -278,7 +278,7 @@ cfg/macro/closure/async/generic injection safety gates still apply.
 
 The 48-test integration suite compiles the earlier fixtures and this fixture,
 including positive/negative scope, shadowing, privacy, exact-once evaluation,
-owned value destruction and mutable-borrow examples. Source, bridge and schema-5
+owned value destruction and mutable-borrow examples. Source, bridge and schema-7
 plan snapshots are checked independently of bundle discovery order. Plans are
 review artifacts; `apply` and `check` rebuild them from original inputs.
 

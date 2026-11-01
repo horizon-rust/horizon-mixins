@@ -38,7 +38,10 @@ systems and schema migrations require explicit integration; see
 [effects and state](effects-and-state.md).
 
 Bundle crates (0.6.0) are native code with the same privileges, including their build scripts.
-They may only use registry packages already pinned in the workspace's `Cargo.lock`, with no path,
-git or workspace dependencies, and no `[workspace]`, `[patch]`, `[replace]` or `[target]` tables.
-Their target paths must stay inside the crate. `[[post_build]]` steps are recorded, never executed,
-by horizon-mixins; the launcher that runs them has to trust them as it trusts the mod.
+Registry dependencies must already be pinned in the workspace's `Cargo.lock`. A path dependency is
+accepted only when it resolves inside the same bundle to another declared crate root; the planner
+rejects escapes, symlinks, undeclared targets, self-edges and cycles across normal/build/dev edges,
+including inactive optional dependencies. Git/workspace dependencies and `[workspace]`, `[patch]`,
+`[replace]` or `[target]` tables remain unsupported. Target paths must stay inside each crate.
+`[[post_build]]` steps are recorded, never executed, by horizon-mixins; the launcher that runs them
+has to trust them as it trusts the mod.

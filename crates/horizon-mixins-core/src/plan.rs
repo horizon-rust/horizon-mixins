@@ -36,8 +36,8 @@ pub struct Plan {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub post_build: Vec<crate::native::PlannedPostBuild>,
 }
-/// The current plan schema: 6 adds named hooks, bundle crates, data and post-build steps.
-pub const SCHEMA: u32 = 6;
+/// The current plan schema: 7 adds resolved same-bundle crate dependency edges.
+pub const SCHEMA: u32 = 7;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedModule {
@@ -101,6 +101,16 @@ pub struct VariableIdentity {
 impl Plan {
     /// Validate externally deserialized IR before traversing any AST path.
     pub fn validate_structure(&self) -> Result<()> {
+        if self.schema != SCHEMA {
+            return Err(Diagnostic::new(
+                "E_PLAN_SCHEMA",
+                format!(
+                    "plan schema {} is unsupported; regenerate it with schema {SCHEMA}",
+                    self.schema
+                ),
+            ));
+        }
+        crate::native::validate_plan_edges(self)?;
         let mut modules = std::collections::BTreeSet::new();
         for m in &self.modules {
             source::relative(Path::new(&m.file))?;

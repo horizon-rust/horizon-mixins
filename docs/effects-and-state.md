@@ -1,6 +1,6 @@
 # Expression results, after hooks, interior cancellation and state (0.5.0)
 
-Plans use schema 5. Regenerate older plans; the transformer verifies its version,
+Plans use schema 7. Regenerate older plans; the transformer verifies its version,
 Rust toolchain, source hashes and original site fingerprints before rewriting.
 These are build-time Rust contracts, not Java annotation compatibility.
 

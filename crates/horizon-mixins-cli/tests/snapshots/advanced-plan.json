@@ -1513,6 +1513,6 @@
       "target": "advanced_game::nested_wrap"
     }
   ],
-  "schema": 6,
+  "schema": 7,
   "transformer": "0.6.0"
 }
