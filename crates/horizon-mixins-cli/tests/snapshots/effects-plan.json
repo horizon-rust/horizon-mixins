@@ -526,7 +526,7 @@
     }
   ],
   "rustc": "<pinned toolchain>",
-  "schema": 6,
+  "schema": 7,
   "states": [
     {
       "constructors": [

@@ -15,7 +15,7 @@ recursive/escaping module files, ambiguous identities and source files compiled
 under more than one module/target identity. Tests/examples/benches are copied
 and compiled by Cargo but are not injection targets in the MVP.
 
-Every injection, bridge and state constructor resolves before any transformation. The schema-5 JSON plan
+Every injection, bridge and state constructor resolves before any transformation. The schema-7 JSON plan
 records transformer/rustc version, every input file's SHA-256, mod identity and
 version, target ID, original file and item-index path, signature/body fingerprint,
 call preorder number/fingerprint, selector/count/ordinal, priority, helper source,
@@ -84,7 +84,10 @@ fields/getters/initializer functions appended after all body changes. This keeps
 all original function/expression indices stable. Struct updates move existing
 state through their rest expression. See [effects and state](effects-and-state.md).
 
-`horizon-mixins-core::native` (0.6.0) resolves named hooks from `native-hooks.json` before
-indexing, and validates bundle crates, data and post-build steps against the workspace's members
-and `Cargo.lock`. After the transform, `native::stage` adds the bundle files to the staged set and
-edits the root manifest, the dependents' manifests and `Cargo.lock` in place.
+`horizon-mixins-core::native` resolves named hooks from `native-hooks.json` before
+indexing, and validates bundle crates, same-bundle dependency edges, data and post-build steps
+against the workspace's members and `Cargo.lock`. It catalogs all declared crate roots before
+resolving normal/build/dev path dependencies, rejects cycles and unsafe paths, and plans edges by
+table, alias key and target crate ID. After the transform, `native::stage` verifies the original
+bundle hashes and edge correspondence, rewrites sibling paths relative to staged crate IDs, adds
+the bundle files, and edits workspace/dependent manifests and `Cargo.lock` in place.
