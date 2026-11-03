@@ -104,6 +104,7 @@ pub fn macro_attributes(attrs: &[Attribute]) -> bool {
                 | "must_use"
                 | "deprecated"
                 | "track_caller"
+                | "recursion_limit"
         )
     })
 }

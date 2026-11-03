@@ -68,6 +68,47 @@ source="runtime.rs"
     f
 }
 #[test]
+fn recursion_limit_preserves_head_hooks_and_support_modules() {
+    let f = fixture();
+    for path in ["engine/src/lib.rs", "engine/src/boundary.rs"] {
+        let file = f.root.join(path);
+        let original = fs::read_to_string(&file).unwrap();
+        fs::write(file, format!("#![recursion_limit = \"256\"]\n{original}")).unwrap();
+    }
+    let originals = source::files(&f.root).unwrap();
+    let plan = build_plan(&f.root, &f.mods).unwrap();
+    assert_eq!(plan.injections.len(), 2);
+    assert_eq!(plan.modules.len(), 1);
+    let report = f.run("check");
+    assert!(
+        report["cargo_stdout"]
+            .as_str()
+            .unwrap()
+            .contains("preserved_closure_errors_and_drop ... ok")
+    );
+    for path in ["engine/src/lib.rs", "engine/src/boundary.rs"] {
+        let generated = fs::read_to_string(f.out.join(path)).unwrap();
+        assert!(generated.starts_with("#![recursion_limit = \"256\"]"));
+    }
+    assert_eq!(source::files(&f.root).unwrap(), originals);
+    assert_eq!(f.run("check")["stage_changed"], false);
+}
+
+#[test]
+fn unknown_file_attributes_remain_unsupported() {
+    for path in ["engine/src/lib.rs", "engine/src/boundary.rs"] {
+        let f = fixture();
+        let file = f.root.join(path);
+        let original = fs::read_to_string(&file).unwrap();
+        fs::write(file, format!("#![not_a_builtin_attribute]\n{original}")).unwrap();
+        assert_eq!(
+            build_plan(&f.root, &f.mods).unwrap_err().code,
+            "E_UNSUPPORTED_MACRO"
+        );
+    }
+}
+
+#[test]
 fn head_preserves_lifetime_methods_closures_question_mark_and_drop() {
     let f = fixture();
     let original = source::files(&f.root).unwrap();
