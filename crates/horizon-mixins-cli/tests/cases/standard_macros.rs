@@ -345,3 +345,148 @@ fn hidden_state_constructor_literals_fail_during_planning() {
     );
     reject(&f, "E_UNSUPPORTED_MACRO_SITE");
 }
+
+fn with_macro(definition: &str, body: &str) -> Fixture {
+    let f = fixture(body);
+    f.replace(
+        "engine/src/lib.rs",
+        "pub fn sink(n:i32)",
+        &format!("{definition} pub fn sink(n:i32)"),
+    );
+    f
+}
+fn driver(f: &Fixture, expected: i32) {
+    fs::write(
+        f.root.join("driver/src/lib.rs"),
+        format!("#[test] fn local_macro() {{ assert_eq!(fixture_game::run(),{expected}); }}"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn return_hooks_accept_local_macros_with_provable_scope() {
+    // Horizon's world_items!: a `match` over a field of an ident argument.
+    let f = with_macro(
+        "macro_rules! twice { ($s:ident) => { match $s { 0 => 0, n => n * 2 } }; }",
+        "let x=3; let y=twice!(x); sink(y)",
+    );
+    driver(&f, 7);
+    f.run("check");
+    // expr fragments keep precedence, are evaluated once, and nest in standard macros.
+    let f = with_macro(
+        "macro_rules! add { ($a:expr, $b:expr) => { $a * $b }; }",
+        "let mut n=0; let v=vec![add!({ n+=1; n+1 }, 1+2)]; sink(v[0]+n)",
+    );
+    // (1+1)*(1+2) = 6, one evaluation of the block, plus the hook's +1.
+    driver(&f, 8);
+    f.run("check");
+    // A definition in an ancestor module, before the child module that holds the target.
+    let f = fixture("0");
+    f.replace(
+        "engine/src/lib.rs",
+        "pub fn sink(n:i32)",
+        "macro_rules! base { ($s:ident) => { $s + 1 }; } pub mod inner { pub fn run()->i32 { let x=1; base!(x) } } pub fn sink(n:i32)",
+    );
+    f.replace(
+        "mods/alpha/horizon-mixin.toml",
+        "fixture_game::run",
+        "fixture_game::inner::run",
+    );
+    fs::write(
+        f.root.join("driver/src/lib.rs"),
+        "#[test] fn local_macro() { assert_eq!(fixture_game::inner::run(),3); }",
+    )
+    .unwrap();
+    f.run("check");
+}
+#[test]
+fn local_macros_with_hidden_exits_or_unproven_scope_are_rejected() {
+    for (definition, body) in [
+        // Hidden control flow in the transcriber.
+        (
+            "macro_rules! m { () => { return 7 }; }",
+            "let _=m!(); sink(1)",
+        ),
+        (
+            "macro_rules! m { ($a:expr) => { $a? }; }",
+            "let _=m!(Some(1)); sink(1)",
+        ),
+        (
+            "macro_rules! m { () => { (|| 1)() }; }",
+            "let _=m!(); sink(1)",
+        ),
+        // Not a single expression, repetitions, unknown fragments, no matching rule.
+        (
+            "macro_rules! m { () => { let a = 1; a }; }",
+            "let _=m!(); sink(1)",
+        ),
+        (
+            "macro_rules! m { ($($a:expr),*) => { 1 }; }",
+            "let _=m!(1); sink(1)",
+        ),
+        (
+            "macro_rules! m { ($a:stmt) => { 1 }; }",
+            "let _=m!(let a = 1); sink(1)",
+        ),
+        (
+            "macro_rules! m { ($a:ident) => { $a }; }",
+            "let _=m!(1); sink(1)",
+        ),
+        // A definition that can be redefined, reordered or is not yet in scope.
+        (
+            "macro_rules! m { () => { 1 }; } macro_rules! m { () => { 2 }; }",
+            "let _=m!(); sink(1)",
+        ),
+        (
+            "unknown_item!(); macro_rules! m { () => { 1 }; }",
+            "let _=m!(); sink(1)",
+        ),
+        (
+            "#[macro_use] mod other {} macro_rules! m { () => { 1 }; }",
+            "let _=m!(); sink(1)",
+        ),
+        // Not a textual definition at all.
+        ("", "let _=m!(); sink(1)"),
+    ] {
+        let f = with_macro(definition, body);
+        let e = build_plan(&f.root, &f.mods).unwrap_err();
+        assert_eq!(e.code, "E_UNSUPPORTED_MACRO", "{definition} {body}: {e}");
+    }
+    // Defined after the target: the invocation may still resolve to something else.
+    let f = fixture("let _=m!(); sink(1)");
+    f.append("engine/src/lib.rs", "macro_rules! m { () => { 1 }; }");
+    reject(&f, "E_UNSUPPORTED_MACRO");
+}
+#[test]
+fn local_macro_expansions_cannot_hide_selector_matches() {
+    for (kind, selector, definition, body) in [
+        // The call sits in the transcriber.
+        (
+            "BEFORE_CALL",
+            "sink",
+            "macro_rules! m { ($a:expr) => { sink($a) }; }",
+            "let _=m!(1); sink(1)",
+        ),
+        // The call sits in an argument.
+        (
+            "BEFORE_CALL",
+            "sink",
+            "macro_rules! m { ($a:expr) => { $a + 1 }; }",
+            "let _=m!(sink(1)); sink(1)",
+        ),
+        (
+            "MODIFY_CONSTANT",
+            "123",
+            "macro_rules! m { () => { 123 }; }",
+            "let _=m!(); sink(123)",
+        ),
+    ] {
+        let f = with_macro(definition, body);
+        f.append(
+            "mods/alpha/horizon-mixin.toml",
+            &format!("\n[[injection]]\nid='site'\ntarget='fixture_game::run'\nkind='{kind}'\nselector='{selector}'\nrequire=1\nordinal=0\nhelper='before.rs'\n"),
+        );
+        fs::write(f.mods.join("alpha/before.rs"), "fn before() {}").unwrap();
+        reject(&f, "E_UNSUPPORTED_MACRO_SITE");
+    }
+}
