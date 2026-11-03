@@ -107,10 +107,10 @@ fn tool_attribute(path: &syn::Path) -> bool {
     let names: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
     path.leading_colon.is_none()
         && match names.as_slice() {
+            [tool, name] if tool == "rust_analyzer" => name == "skip",
             [tool, _, ..] => matches!(tool.as_str(), "rustfmt" | "clippy" | "diagnostic"),
             _ => false,
         }
-        || names == ["rust_analyzer", "skip"]
 }
 
 /// Whether `attrs` hold an attribute that may expand code, so what the item holds cannot be
@@ -654,11 +654,12 @@ mod tests {
                 "{attribute:?}"
             );
         }
-        let others: [syn::Attribute; 5] = [
+        let others: [syn::Attribute; 6] = [
             parse_quote!(#[rust_analyzer::other]),
             parse_quote!(#[serde::something]),
             parse_quote!(#[tokio::main]),
             parse_quote!(#[::rustfmt::skip]),
+            parse_quote!(#[::rust_analyzer::skip]),
             parse_quote!(#[rustfmt_helper::skip]),
         ];
         for attribute in others {
