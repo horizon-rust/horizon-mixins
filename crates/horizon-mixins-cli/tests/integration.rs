@@ -819,6 +819,9 @@ mod effects;
 #[path = "cases/standard_macros.rs"]
 mod standard_macros;
 
+#[path = "cases/destructured.rs"]
+mod destructured;
+
 #[path = "cases/native.rs"]
 mod native;
 
