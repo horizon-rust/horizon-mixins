@@ -6,6 +6,17 @@ use syn::{
     visit::{self, Visit},
 };
 
+pub fn contains_closure(expr: &Expr) -> bool {
+    struct Find(bool);
+    impl<'ast> Visit<'ast> for Find {
+        fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {
+            self.0 = true;
+        }
+    }
+    let mut find = Find(false);
+    find.visit_expr(expr);
+    find.0
+}
 pub fn is_call(expr: &Expr) -> bool {
     matches!(expr, Expr::Call(_) | Expr::MethodCall(_))
 }
@@ -101,6 +112,8 @@ pub struct Site {
     pub fingerprint: String,
     pub whole_expression: bool,
     pub const_context: bool,
+    /// Inside a closure body: the closure may run later, elsewhere or never.
+    pub in_closure: bool,
 }
 #[derive(Default)]
 pub struct Sites {
@@ -110,6 +123,7 @@ pub struct Sites {
     pub values: Vec<Site>,
     next_is_root: bool,
     const_context: bool,
+    closures: usize,
 }
 impl Sites {
     pub fn in_block(block: &syn::Block) -> Self {
@@ -140,6 +154,11 @@ impl<'ast> Visit<'ast> for Sites {
             _ => visit::visit_stmt(self, stmt),
         }
     }
+    fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
+        self.closures += 1;
+        visit::visit_expr_closure(self, closure);
+        self.closures -= 1;
+    }
     fn visit_expr_repeat(&mut self, expr: &'ast syn::ExprRepeat) {
         self.visit_expr(&expr.expr);
         let old = std::mem::replace(&mut self.const_context, true);
@@ -166,6 +185,7 @@ impl<'ast> Visit<'ast> for Sites {
             fingerprint: source::fingerprint(tokens(expr)),
             whole_expression: root,
             const_context: self.const_context,
+            in_closure: self.closures > 0,
         };
         self.values.push(site(expression));
         if is_call(expr) {

@@ -213,7 +213,7 @@ fn new_manifest_fields_and_value_contracts_fail_closed() {
         (
             "game/src/lib.rs",
             "pub fn constants() -> i32 { 3",
-            "pub fn constants() -> i32 { let _c = || 0; 3",
+            "pub fn constants() -> i32 { let _c = async || 0; 3",
             "E_UNSUPPORTED_CONTROL_FLOW",
         ),
     ] {

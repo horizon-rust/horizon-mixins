@@ -54,7 +54,7 @@ impl Policy {
         self.bare
             .extend(["format", "matches", "vec"].map(str::to_owned));
     }
-    fn imported(&mut self, tree: &UseTree) {
+    pub(crate) fn imported(&mut self, tree: &UseTree) {
         match tree {
             UseTree::Path(p) => self.imported(&p.tree),
             UseTree::Name(n) => {

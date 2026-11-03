@@ -9,7 +9,11 @@ use crate::{
     slices, source,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    process::Command,
+};
 use syn::{
     Expr, Item,
     visit::{self, Visit},
@@ -460,7 +464,11 @@ pub fn build_staged(workspace: &Path, mods: &Path) -> Result<(Plan, crate::nativ
                 }
             };
             let f = index.resolve(&injection.target).map_err(context)?;
-            let hidden = validate_target(&index, f, injection.kind).map_err(context)?;
+            let relaxed = injection.kind.selects_site() || injection.kind == Kind::Return;
+            let (hidden, local_uses) =
+                validate_target_with(&index, f, injection.kind, relaxed).map_err(context)?;
+            check_local_uses(&local_uses, injection, helper)
+                .map_err(|e| context(e.file(&f.file)))?;
             crate::standard_macros::check_sites(&hidden, injection)
                 .map_err(|e| context(e.file(&f.file)))?;
             if injection.kind == Kind::Return
@@ -598,6 +606,17 @@ pub fn build_staged(workspace: &Path, mods: &Path) -> Result<(Plan, crate::nativ
                 })?;
                 if site.const_context {
                     return Err(context(Diagnostic::new("E_UNSUPPORTED_SITE", "injection cannot introduce runtime helpers into a compile-time array length or const argument").file(&f.file)));
+                }
+                // Closures elsewhere in the function are left as they were. A hook never runs
+                // inside one: the closure may run later, elsewhere or never, and a cancelling
+                // `return` would leave only the closure.
+                if site.in_closure {
+                    return Err(context(Diagnostic::new("E_UNSUPPORTED_SITE", "the selected site is inside a closure; hooks run only outside closure bodies").file(&f.file)));
+                }
+                if !matches!(injection.kind, Kind::BeforeCall | Kind::AfterCall)
+                    && sites::contains_closure(&site.expr)
+                {
+                    return Err(context(Diagnostic::new("E_UNSUPPORTED_SITE", "the selected site contains a closure, which this hook would move into generated code").file(&f.file)));
                 }
                 if (injection.kind == Kind::BeforeCall
                     || (injection.kind == Kind::AfterCall && injection.cancellable))
@@ -903,6 +922,17 @@ pub fn build_staged(workspace: &Path, mods: &Path) -> Result<(Plan, crate::nativ
     Ok((plan, native.extras))
 }
 pub(crate) fn validate_target(index: &Index, f: &Function, kind: Kind) -> Result<Vec<Expr>> {
+    validate_target_with(index, f, kind, false).map(|(hidden, _)| hidden)
+}
+/// `relaxed` admits what a hook that rewrites only the one site it selects can leave alone:
+/// plain closures elsewhere in the function and function-local `use` declarations (whose
+/// names are returned so the caller can check them against the generated code).
+pub(crate) fn validate_target_with(
+    index: &Index,
+    f: &Function,
+    kind: Kind,
+    relaxed: bool,
+) -> Result<(Vec<Expr>, BTreeSet<String>)> {
     let s = &f.signature;
     if s.ident.to_string().starts_with("__horizon_mixins_") {
         return Err(Diagnostic::new(
@@ -937,12 +967,22 @@ pub(crate) fn validate_target(index: &Index, f: &Function, kind: Kind) -> Result
         // A `?` is an exit RETURN would miss; MODIFY_VARIABLE leaves one outside its value alone.
         try_outside_value: kind == Kind::ModifyVariable,
         body_macros: false,
+        relaxed,
+        local_uses: BTreeSet::new(),
         in_body: false,
         macro_depth: 0,
         policy: crate::standard_macros::Policy::for_function(index, f),
         macro_error: None,
         hidden: Vec::new(),
     };
+    if relaxed {
+        // A `use` anywhere in a block applies to the whole block, macro calls before it included.
+        let mut uses = LocalUses(Vec::new());
+        uses.visit_block(&f.block);
+        for item in uses.0 {
+            safety.policy.imported(&item.tree);
+        }
+    }
     // Signature macros still require semantic resolution. Only preserved body
     // expression/statement invocations may remain opaque.
     safety.visit_signature(s);
@@ -960,7 +1000,87 @@ pub(crate) fn validate_target(index: &Index, f: &Function, kind: Kind) -> Result
     if let Some(error) = safety.macro_error {
         return Err(error.file(&f.file));
     }
-    Ok(safety.hidden)
+    Ok((safety.hidden, safety.local_uses))
+}
+/// Every `use` declaration in a function body, at any depth.
+struct LocalUses<'a>(Vec<&'a syn::ItemUse>);
+impl<'ast> Visit<'ast> for LocalUses<'ast> {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.0.push(item);
+    }
+}
+/// The names a `use` tree binds, or `None` for a glob, whose names are unknown.
+fn bound_names(
+    tree: &syn::UseTree,
+    parent: Option<&syn::Ident>,
+    out: &mut BTreeSet<String>,
+) -> bool {
+    match tree {
+        syn::UseTree::Path(p) => bound_names(&p.tree, Some(&p.ident), out),
+        syn::UseTree::Name(n) => {
+            let name = if n.ident == "self" {
+                parent
+            } else {
+                Some(&n.ident)
+            };
+            out.extend(name.map(|n| n.to_string()));
+            true
+        }
+        syn::UseTree::Rename(r) => {
+            if r.rename != "_" {
+                out.insert(r.rename.to_string());
+            }
+            true
+        }
+        syn::UseTree::Group(g) => g.items.iter().all(|t| bound_names(t, parent, out)),
+        syn::UseTree::Glob(_) => false,
+    }
+}
+/// A function-local `use` could rebind a name the generated code resolves inside the function
+/// (helper bodies, binding types and values, the result type). Refuse any name those mention.
+fn check_local_uses(
+    uses: &BTreeSet<String>,
+    injection: &manifest::Injection,
+    helper: &str,
+) -> Result<()> {
+    if uses.is_empty() {
+        return Ok(());
+    }
+    fn idents(stream: proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
+        for tree in stream {
+            match tree {
+                proc_macro2::TokenTree::Ident(i) => {
+                    out.insert(i.to_string());
+                }
+                proc_macro2::TokenTree::Group(g) => idents(g.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut mentioned = BTreeSet::new();
+    let texts = std::iter::once(helper)
+        .chain(injection.result.as_deref())
+        .chain(
+            injection
+                .bindings
+                .iter()
+                .flat_map(|b| [b.ty.as_str(), b.value.as_str()]),
+        );
+    for text in texts {
+        // Placeholders such as `$value` are not valid Rust, but their identifiers are.
+        if let Ok(stream) = text.replace('$', " ").parse::<proc_macro2::TokenStream>() {
+            idents(stream, &mut mentioned);
+        }
+    }
+    if let Some(name) = uses.iter().find(|n| mentioned.contains(*n)) {
+        return Err(Diagnostic::new(
+            "E_UNSUPPORTED_SCOPE",
+            format!(
+                "function-local `use` binds `{name}`, which the helper or its bindings also mention; the generated code would resolve it differently"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 const REFERENCED_CALL: (&str, &str) = (
@@ -1040,6 +1160,8 @@ struct Safety {
     rewrites_body: bool,
     try_outside_value: bool,
     body_macros: bool,
+    relaxed: bool,
+    local_uses: BTreeSet<String>,
     in_body: bool,
     macro_depth: usize,
     policy: crate::standard_macros::Policy,
@@ -1098,7 +1220,7 @@ impl<'ast> Visit<'ast> for Safety {
         }
         match expr {
             // RETURN never rewrites inside a closure; what is inside is still checked.
-            Expr::Closure(c) if !self.rewrites_body && c.asyncness.is_none() => {}
+            Expr::Closure(c) if (!self.rewrites_body || self.relaxed) && c.asyncness.is_none() => {}
             Expr::Try(_) if self.try_outside_value => {}
             Expr::Closure(_)
             | Expr::Async(_)
@@ -1162,6 +1284,25 @@ impl<'ast> Visit<'ast> for Safety {
     fn visit_item(&mut self, item: &'ast Item) {
         if self.boundary {
             visit::visit_item(self, item);
+            return;
+        }
+        if self.relaxed
+            && let Item::Use(u) = item
+        {
+            if !matches!(u.vis, syn::Visibility::Inherited) {
+                self.error = Some((
+                    "E_UNSUPPORTED_CONTROL_FLOW",
+                    "visibility on a function-local use declaration is unsupported",
+                ));
+            } else if !bound_names(&u.tree, None, &mut self.local_uses) {
+                self.error = Some((
+                    "E_UNSUPPORTED_CONTROL_FLOW",
+                    "glob imports in target functions are unsupported",
+                ));
+            }
+            for attr in &u.attrs {
+                self.visit_attribute(attr);
+            }
             return;
         }
         self.error = Some((
