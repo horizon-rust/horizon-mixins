@@ -120,6 +120,9 @@ The destination must have exactly one production source identity. The index trea
 `cfg(not(test))` as active and `cfg(test)` as inactive. Other cfg predicates
 remain unresolved. Existing type/module/import names, competing module names
 and unresolved glob imports are rejected. Payloads are parsed during planning.
+Rust's built-in `recursion_limit` attribute is preserved on indexed files; it
+does not expand code and does not block hooks or support modules. Unknown
+attribute macros remain unsupported.
 External `mod`, `#[path]`, direct include macros, file attributes and shebangs
 are unsupported; assemble multi-file mod implementations into a self-contained
 payload before planning. Ordinary Rust macros and cfg inside new implementation code
