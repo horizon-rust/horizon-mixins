@@ -643,3 +643,34 @@ fn crate_level_built_in_attributes_do_not_make_the_root_a_macro_module() {
         "E_UNSUPPORTED_MACRO"
     );
 }
+
+#[test]
+fn known_tool_attributes_pass_and_other_two_segment_attributes_still_fail() {
+    for attribute in [
+        "#[rustfmt::skip]",
+        "#[clippy::too_many_arguments]",
+        "#[diagnostic::do_not_recommend]",
+    ] {
+        let f = Fixture::new();
+        f.replace(
+            "engine/src/entity.rs",
+            "pub fn advance",
+            &format!("{attribute}\npub fn advance"),
+        );
+        build_plan(&f.root, &f.mods).unwrap_or_else(|e| panic!("{attribute}: {e}"));
+    }
+    for attribute in [
+        "#[tokio::main]",
+        "#[serde::skip]",
+        "#[rust_analyzer::other]",
+    ] {
+        let f = Fixture::new();
+        f.replace(
+            "engine/src/entity.rs",
+            "pub fn advance",
+            &format!("{attribute}\npub fn advance"),
+        );
+        let e = build_plan(&f.root, &f.mods).unwrap_err();
+        assert_eq!(e.code, "E_UNSUPPORTED_MACRO", "{attribute}: {e}");
+    }
+}

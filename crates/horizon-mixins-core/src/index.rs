@@ -100,12 +100,25 @@ const CRATE_ATTRIBUTES: [&str; 9] = [
     "feature",
 ];
 
+/// An attribute of a tool the compiler knows by name: `rustfmt::skip`, `clippy::too_many_arguments`,
+/// `diagnostic::on_unimplemented`, `rust_analyzer::skip`. They hint to the tool and expand nothing.
+/// Any other path with two segments is another crate's attribute macro.
+fn tool_attribute(path: &syn::Path) -> bool {
+    let names: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    path.leading_colon.is_none()
+        && match names.as_slice() {
+            [tool, _, ..] => matches!(tool.as_str(), "rustfmt" | "clippy" | "diagnostic"),
+            _ => false,
+        }
+        || names == ["rust_analyzer", "skip"]
+}
+
 /// Whether `attrs` hold an attribute that may expand code, so what the item holds cannot be
 /// trusted to be what is written. Only attributes known to expand nothing pass.
 pub fn macro_attributes(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| {
         let Some(name) = a.path().get_ident() else {
-            return true;
+            return !tool_attribute(a.path());
         };
         let name = name.to_string();
         let inner = matches!(a.style, syn::AttrStyle::Inner(_));
@@ -625,6 +638,37 @@ mod tests {
         ] {
             assert!(!macro_attributes(&inner(source)), "{source}");
         }
+        // The known tools' attributes hint to the tool and expand nothing, on any item.
+        let tools: [syn::Attribute; 7] = [
+            parse_quote!(#[rustfmt::skip]),
+            parse_quote!(#[rustfmt::skip::macros(vec)]),
+            parse_quote!(#[clippy::cognitive_complexity = "30"]),
+            parse_quote!(#[clippy::too_many_arguments]),
+            parse_quote!(#[diagnostic::on_unimplemented(message = "no")]),
+            parse_quote!(#[diagnostic::do_not_recommend]),
+            parse_quote!(#[rust_analyzer::skip]),
+        ];
+        for attribute in tools {
+            assert!(
+                !macro_attributes(std::slice::from_ref(&attribute)),
+                "{attribute:?}"
+            );
+        }
+        let others: [syn::Attribute; 5] = [
+            parse_quote!(#[rust_analyzer::other]),
+            parse_quote!(#[serde::something]),
+            parse_quote!(#[tokio::main]),
+            parse_quote!(#[::rustfmt::skip]),
+            parse_quote!(#[rustfmt_helper::skip]),
+        ];
+        for attribute in others {
+            assert!(macro_attributes(&[attribute]));
+        }
+        // A tool attribute does not hide another one beside it.
+        assert!(macro_attributes(&[
+            parse_quote!(#[rustfmt::skip]),
+            parse_quote!(#[tokio::main]),
+        ]));
         // Outer, the same names do not configure the crate; they stay refused.
         assert!(macro_attributes(&[
             parse_quote!(#[recursion_limit = "256"])
@@ -636,6 +680,7 @@ mod tests {
             "#![no_implicit_prelude]",
             "#![some_attribute_macro]",
             "#![tool::attribute]",
+            "#![rustfmt_helper::skip]",
             "#![recursion_limit = \"256\"]
 #![macro_use]",
         ] {
