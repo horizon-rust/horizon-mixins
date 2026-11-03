@@ -597,3 +597,80 @@ bindings=[{{name="host",ty="&mut Host<'_>",value="&mut *self"}}]
         );
     }
 }
+
+#[test]
+fn crate_level_built_in_attributes_do_not_make_the_root_a_macro_module() {
+    // Issue horizon#8169: horizon-client's lib.rs gained `#![recursion_limit = "256"]`, and every
+    // target below it was refused with "target module has an unexpanded attribute macro".
+    let baseline = Fixture::new();
+    build_plan(&baseline.root, &baseline.mods).unwrap();
+    for attribute in [
+        "#![recursion_limit = \"256\"]",
+        "#![type_length_limit = \"1048576\"]",
+        "#![crate_name = \"fixture_game\"]",
+        "#![crate_type = \"lib\"]",
+        "#![no_builtins]",
+        "#![feature(test)]",
+        "#![allow(dead_code)]\n#![recursion_limit = \"256\"]",
+    ] {
+        let f = Fixture::new();
+        let lib = f.root.join("engine/src/lib.rs");
+        let source = fs::read_to_string(&lib).unwrap();
+        fs::write(&lib, format!("{attribute}\n{source}")).unwrap();
+        build_plan(&f.root, &f.mods).unwrap_or_else(|e| panic!("{attribute}: {e}"));
+    }
+    // What can expand or define macros still marks the module, and so does a built-in that is
+    // not a crate-level inner attribute.
+    for (attribute, code) in [
+        ("#![macro_use]\n", "E_UNSUPPORTED_MACRO"),
+        ("#![some_attribute_macro]\n", "E_UNSUPPORTED_MACRO"),
+    ] {
+        let f = Fixture::new();
+        let lib = f.root.join("engine/src/lib.rs");
+        let source = fs::read_to_string(&lib).unwrap();
+        fs::write(&lib, format!("{attribute}{source}")).unwrap();
+        let e = build_plan(&f.root, &f.mods).unwrap_err();
+        assert_eq!(e.code, code, "{attribute}: {e}");
+    }
+    let f = Fixture::new();
+    f.replace(
+        "engine/src/lib.rs",
+        "pub mod entity;",
+        "#[recursion_limit = \"256\"]\npub mod entity;",
+    );
+    assert_eq!(
+        build_plan(&f.root, &f.mods).unwrap_err().code,
+        "E_UNSUPPORTED_MACRO"
+    );
+}
+
+#[test]
+fn known_tool_attributes_pass_and_other_two_segment_attributes_still_fail() {
+    for attribute in [
+        "#[rustfmt::skip]",
+        "#[clippy::too_many_arguments]",
+        "#[diagnostic::do_not_recommend]",
+    ] {
+        let f = Fixture::new();
+        f.replace(
+            "engine/src/entity.rs",
+            "pub fn advance",
+            &format!("{attribute}\npub fn advance"),
+        );
+        build_plan(&f.root, &f.mods).unwrap_or_else(|e| panic!("{attribute}: {e}"));
+    }
+    for attribute in [
+        "#[tokio::main]",
+        "#[serde::skip]",
+        "#[rust_analyzer::other]",
+    ] {
+        let f = Fixture::new();
+        f.replace(
+            "engine/src/entity.rs",
+            "pub fn advance",
+            &format!("{attribute}\npub fn advance"),
+        );
+        let e = build_plan(&f.root, &f.mods).unwrap_err();
+        assert_eq!(e.code, "E_UNSUPPORTED_MACRO", "{attribute}: {e}");
+    }
+}
