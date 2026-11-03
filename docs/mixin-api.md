@@ -53,6 +53,14 @@ Calls and fields are not binding expressions. Local declarations use the explici
 capture selectors below. Use concrete types in helper signatures. A parameter
 binding must still refer to that parameter at each selected site; shadowing there
 is rejected.
+A destructured parameter such as `(xd, zd): (f64, f64)` or `Point { x, mut y }: Point`
+has no name of its own, but each name its pattern binds is a target parameter for
+bindings, with the pattern's own `mut`. The whole parameter cannot be bound, and
+patterns containing macros are rejected. The binding names are taken syntactically, so a
+unit struct or constant written as a pattern is treated as a binding name as well, which
+can only make the planner stricter. Because the types are not written next to the
+names, a `$local` capture of such a name is not type-checked by the planner;
+Rust checks it when the stage is compiled.
 Rust compilation validates the actual types, mutability, lifetimes and moves.
 Value/operation bindings beginning with `$` are described in
 [advanced-injections.md](advanced-injections.md). Local selectors
