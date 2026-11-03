@@ -106,7 +106,7 @@ cargo run --locked -p horizon-mixins-cli -- check \
 ```
 
 The [scoped injection and bridge guide](docs/scopes-and-bridges.md) documents
-the exact contracts and limits. Plans use schema 5; regenerate older plans.
+the exact contracts and limits. Plans use schema 7; regenerate older plans.
 
 Validate the implementation:
 
@@ -166,8 +166,9 @@ cargo run --locked -p horizon-mixins-cli -- check \
 Version 0.6.0 adds what larger native mods need: a named `hook` + `hook_version` from the
 workspace's `native-hooks.json` instead of a raw target, the bundle's own crates (`[[crate]]`,
 staged as workspace members with registry dependencies taken only from the existing `Cargo.lock`),
-`data/` files staged to `native-data/<mod-id>/`, and `[[post_build]]` steps written to
-`native-post-build.json` for the launcher (the tool never runs them). Plans use schema 6. See
+same-bundle path dependencies between declared crates, `data/` files staged to
+`native-data/<mod-id>/`, and `[[post_build]]` steps written to `native-post-build.json` for the
+launcher (the tool never runs them). Plans use schema 7. See
 [named hooks, bundle crates, data and post-build steps](docs/crates-data-and-named-hooks.md).
 
 ```sh

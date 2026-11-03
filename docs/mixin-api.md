@@ -104,7 +104,7 @@ examples](advanced-injections.md). Version 0.3.0 adds local capture, slices,
 MODIFY_ARGS, MODIFY_VARIABLE and reusable accessor/invoker bridges; see
 [scoped contracts and examples](scopes-and-bridges.md). A bundle may contain
 injections, bridges, support modules and/or state; IDs are unique within a bundle.
-Plans use schema 5, including lexical identities, original expression
+Plans use schema 7, including lexical identities, original expression
 coordinates, resolved regions and versioned bridge metadata. Regenerate older
 plans after upgrading.
 
@@ -135,5 +135,6 @@ identity and selectors matching macro internals are rejected. See
 
 Version 0.6.0 adds `hook`/`hook_version` (exactly one of `target` or `hook` per injection),
 `[[crate]]` and `[[post_build]]`, and stages a bundle's `data/` folder. A bundle may now consist of
-crates only. CLI success reports include `crates`, `data` and `post_build` counts, and plans use
-schema 6. See [named hooks, bundle crates, data and post-build steps](crates-data-and-named-hooks.md).
+crates only, and its declared crates may depend on one another through validated same-bundle paths.
+CLI success reports include `crates`, `data` and `post_build` counts, and plans use schema 7. See
+[named hooks, bundle crates, sibling dependencies, data and post-build steps](crates-data-and-named-hooks.md).

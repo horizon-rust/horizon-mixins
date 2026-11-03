@@ -65,7 +65,7 @@ fn effects_compile_and_preserve_pristine_files_and_mtimes() {
 fn effects_snapshots_and_discovery_order_are_deterministic() {
     let f = fixture();
     let plan = build_plan(&f.root, &f.mods).unwrap();
-    assert_eq!(plan.schema, 6);
+    assert_eq!(plan.schema, 7);
     fs::rename(f.mods.join("alpha"), f.mods.join("z-alpha")).unwrap();
     fs::rename(f.mods.join("beta"), f.mods.join("a-beta")).unwrap();
     assert_eq!(

@@ -68,7 +68,7 @@ fn all_features_compile_compose_and_preserve_source_and_mtimes() {
 fn advanced_source_and_plan_snapshots_ignore_discovery_order() {
     let f = fixture();
     let plan = build_plan(&f.root, &f.mods).unwrap();
-    assert_eq!(plan.schema, 6);
+    assert_eq!(plan.schema, 7);
     fs::rename(f.mods.join("alpha"), f.mods.join("z-alpha")).unwrap();
     fs::rename(f.mods.join("beta"), f.mods.join("a-beta")).unwrap();
     assert_eq!(
