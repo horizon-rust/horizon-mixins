@@ -819,9 +819,6 @@ mod effects;
 #[path = "cases/standard_macros.rs"]
 mod standard_macros;
 
-#[path = "cases/destructured.rs"]
-mod destructured;
-
 #[path = "cases/native.rs"]
 mod native;
 
@@ -830,6 +827,9 @@ mod returns;
 
 #[path = "cases/variables.rs"]
 mod variables;
+
+#[path = "cases/destructured.rs"]
+mod destructured;
 
 #[test]
 fn production_test_cfg_modules_are_indexed_and_applied() {
