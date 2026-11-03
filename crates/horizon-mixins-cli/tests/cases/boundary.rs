@@ -70,10 +70,22 @@ source="runtime.rs"
 #[test]
 fn recursion_limit_preserves_head_hooks_and_support_modules() {
     let f = fixture();
-    for path in ["engine/src/lib.rs", "engine/src/boundary.rs"] {
-        let file = f.root.join(path);
-        let original = fs::read_to_string(&file).unwrap();
-        fs::write(file, format!("#![recursion_limit = \"256\"]\n{original}")).unwrap();
+    let file = f.root.join("engine/src/lib.rs");
+    let original = fs::read_to_string(&file).unwrap();
+    fs::write(file, format!("#![recursion_limit = \"256\"]\n{original}")).unwrap();
+    // Keep this crate-level attribute at a valid crate-root location. That file
+    // is also the support destination; the hooks target its external submodule.
+    f.replace(
+        "mods/alpha/horizon-mixin.toml",
+        "file=\"engine/src/boundary.rs\"",
+        "file=\"engine/src/lib.rs\"",
+    );
+    for id in ["alpha", "beta"] {
+        f.replace(
+            &format!("mods/{id}/head.rs"),
+            "support::touch()",
+            "crate::support::touch()",
+        );
     }
     let originals = source::files(&f.root).unwrap();
     let plan = build_plan(&f.root, &f.mods).unwrap();
@@ -86,10 +98,8 @@ fn recursion_limit_preserves_head_hooks_and_support_modules() {
             .unwrap()
             .contains("preserved_closure_errors_and_drop ... ok")
     );
-    for path in ["engine/src/lib.rs", "engine/src/boundary.rs"] {
-        let generated = fs::read_to_string(f.out.join(path)).unwrap();
-        assert!(generated.starts_with("#![recursion_limit = \"256\"]"));
-    }
+    let generated = fs::read_to_string(f.out.join("engine/src/lib.rs")).unwrap();
+    assert!(generated.starts_with("#![recursion_limit = \"256\"]"));
     assert_eq!(source::files(&f.root).unwrap(), originals);
     assert_eq!(f.run("check")["stage_changed"], false);
 }
