@@ -5,7 +5,8 @@ use crate::{
     manifest::{Injection, Kind},
     sites,
 };
-use std::collections::BTreeSet;
+use proc_macro2::TokenStream;
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{
     Expr, Item, Macro, Pat, Token, UseTree,
     parse::{ParseStream, Parser},
@@ -26,11 +27,21 @@ impl From<Vec<Expr>> for Inputs {
     }
 }
 
+/// A `macro_rules!` definition found while walking the target's module chain.
+struct Local {
+    rules: TokenStream,
+    /// Defined before the target in textual order, so in scope at the target.
+    visible: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct Policy {
     bare: BTreeSet<String>,
     roots: BTreeSet<String>,
     absolute: BTreeSet<String>,
+    locals: BTreeMap<String, Vec<Local>>,
+    /// An item expansion or `#[macro_use]` could define or reorder textual macros.
+    opaque_macros: bool,
 }
 impl Policy {
     pub fn for_function(index: &Index, f: &Function) -> Self {
@@ -44,7 +55,8 @@ impl Policy {
         for (file, owners) in &index.source_owners {
             for owner in owners {
                 if f.module == *owner || f.module.starts_with(&format!("{owner}::")) {
-                    policy.scope(&index.files[file].items, owner, &f.module);
+                    let node = (*file == f.file).then_some(f.node.as_slice());
+                    policy.scope(&index.files[file].items, owner, &f.module, node);
                 }
             }
         }
@@ -77,17 +89,32 @@ impl Policy {
             }
         }
     }
-    fn scope(&mut self, items: &[Item], module: &str, target: &str) {
-        for item in items {
+    /// `node` is the target's item path within `items`, when the target lives in this list.
+    fn scope(&mut self, items: &[Item], module: &str, target: &str, node: Option<&[usize]>) {
+        // Definitions seen so far that become visible once the walk reaches the child
+        // module leading to the target.
+        let mut before_child: Vec<(String, usize)> = Vec::new();
+        for (i, item) in items.iter().enumerate() {
             match item {
                 Item::Macro(m) => {
                     if m.mac.path.is_ident("macro_rules") {
                         if let Some(name) = &m.ident {
                             self.bare.insert(name.to_string());
+                            let defs = self.locals.entry(name.to_string()).or_default();
+                            let visible =
+                                module == target && node.is_some_and(|n| n.first() > Some(&i));
+                            if module != target {
+                                before_child.push((name.to_string(), defs.len()));
+                            }
+                            defs.push(Local {
+                                rules: m.mac.tokens.clone(),
+                                visible,
+                            });
                         }
                     } else {
                         // An item expansion could introduce imports or macro definitions.
                         self.uncertain();
+                        self.opaque_macros = true;
                         self.absolute
                             .extend(["std", "core", "alloc"].map(str::to_owned));
                     }
@@ -101,22 +128,38 @@ impl Policy {
                     }
                     if e.attrs.iter().any(|a| a.path().is_ident("macro_use")) {
                         self.uncertain();
+                        self.opaque_macros = true;
                     }
                 }
                 Item::Mod(m) => {
                     self.roots.insert(m.ident.to_string());
                     if m.attrs.iter().any(|a| a.path().is_ident("macro_use")) {
                         self.uncertain();
+                        self.opaque_macros = true;
                     }
                     let next = format!("{module}::{}", m.ident);
-                    if (target == next || target.starts_with(&format!("{next}::")))
-                        && let Some((_, items)) = &m.content
-                    {
-                        self.scope(items, &next, target);
+                    if target == next || target.starts_with(&format!("{next}::")) {
+                        for (name, at) in before_child.drain(..) {
+                            self.locals.get_mut(&name).unwrap()[at].visible = true;
+                        }
+                        if let Some((_, items)) = &m.content {
+                            let nested = node.filter(|n| n.first() == Some(&i)).map(|n| &n[1..]);
+                            self.scope(items, &next, target, nested);
+                        }
                     }
                 }
                 _ => {}
             }
+        }
+    }
+    /// The one `macro_rules!` that a bare invocation of `name` resolves to, if provable.
+    fn local(&self, name: &str) -> Option<&Local> {
+        if self.opaque_macros {
+            return None;
+        }
+        match self.locals.get(name)?.as_slice() {
+            [only] if only.visible => Some(only),
+            _ => None,
         }
     }
     pub fn parse(&self, mac: &Macro) -> Result<Inputs> {
@@ -126,6 +169,13 @@ impl Policy {
             .iter()
             .map(|s| s.ident.to_string())
             .collect();
+        if let [name] = parts.as_slice()
+            && mac.path.leading_colon.is_none()
+            && let Some(local) = self.local(name)
+        {
+            return crate::local_macros::expand(name, &local.rules, &mac.tokens)
+                .map(|expr| Inputs::from(vec![expr]));
+        }
         let name = match parts.as_slice() {
             [name] if !self.bare.contains(name) && mac.path.leading_colon.is_none() => name,
             [root, name]
