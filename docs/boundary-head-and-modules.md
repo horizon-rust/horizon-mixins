@@ -43,7 +43,12 @@ statement macro invocations, such as `format!`, `matches!`, `vec!`, `assert!`
 and macro-generated early returns. Their tokens remain untouched; no expansion or selection inside them
 is performed. Signature, type, pattern and item macros (including local
 `macro_rules!` definitions), unresolved cfg and attribute macros still fail
-closed. Attributes on macro invocations are checked as usual. Cancelling HEAD
+closed. The compiler's own crate-level attributes written as inner attributes
+(`#![recursion_limit = "256"]`, `type_length_limit`, `crate_name`, `crate_type`,
+`no_std`, `no_main`, `no_builtins`, `windows_subsystem` and `feature`) configure
+the compilation and expand nothing, so a crate root that carries them is not an
+attribute-macro module; `macro_use`, `no_implicit_prelude`, `derive`, tool paths
+and the attribute macros of other crates still are. Attributes on macro invocations are checked as usual. Cancelling HEAD
 returns before any original macro or local initializer executes. Async functions
 remain rejected. RETURN and site injections continue to use their stricter control-flow validation, including
 when combined with HEAD. HEAD-only planning does not assign expression/local
