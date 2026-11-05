@@ -23,6 +23,9 @@ pub struct Function {
 }
 #[derive(Debug)]
 pub struct Index {
+    /// A crate's own names (`extern crate self as horizon_client;`) → the cargo target prefix
+    /// its items are indexed under.
+    pub(crate) crate_aliases: BTreeMap<String, BTreeSet<String>>,
     pub(crate) standard_macro_aliases: BTreeMap<String, BTreeSet<String>>,
     pub functions: Vec<Function>,
     pub types: Vec<TypeDefinition>,
@@ -144,6 +147,10 @@ pub fn macro_attributes(attrs: &[Attribute]) -> bool {
 
 impl Index {
     pub fn load(root: &Path) -> Result<Self> {
+        // Cargo canonicalizes what it reports (`\\?\C:\…` on Windows, a resolved junction on
+        // macOS), so the root is compared and stripped in the same form.
+        let root = root.canonicalize().map_err(io)?;
+        let root = root.as_path();
         if !root.join("Cargo.lock").is_file() {
             return Err(Diagnostic::new(
                 "E_UNPINNED",
@@ -187,6 +194,7 @@ impl Index {
             }
         }
         let mut index = Self {
+            crate_aliases: BTreeMap::new(),
             standard_macro_aliases: BTreeMap::new(),
             functions: Vec::new(),
             types: Vec::new(),
@@ -516,10 +524,42 @@ impl Index {
                 Item::Macro(_) => {
                     self.macro_modules.insert(prefix.into());
                 }
+                // The crate's own name: a target may be written with it (`extern crate self as
+                // horizon_client;` in a crate cargo calls `horizon-client-lib`).
+                Item::ExternCrate(e) if parent.is_empty() => {
+                    if e.ident == "self"
+                        && let Some((_, name)) = &e.rename
+                    {
+                        self.crate_aliases
+                            .entry(name.to_string())
+                            .or_default()
+                            .insert(prefix.into());
+                    }
+                }
                 _ => {}
             }
         }
         Ok(())
+    }
+    /// The functions a target names. A crate may name itself (`extern crate self as name;`), so
+    /// the same path under that name means the crate's own items when the id itself matches none.
+    fn matching(&self, target: &str) -> Vec<&Function> {
+        let direct: Vec<&Function> = self.functions.iter().filter(|f| f.id == target).collect();
+        if !direct.is_empty() {
+            return direct;
+        }
+        let Some((head, rest)) = target.split_once("::") else {
+            return direct;
+        };
+        let candidates: Vec<String> = self
+            .crate_aliases
+            .get(head)
+            .map(|real| real.iter().map(|r| format!("{r}::{rest}")).collect())
+            .unwrap_or_default();
+        self.functions
+            .iter()
+            .filter(|f| candidates.contains(&f.id))
+            .collect()
     }
     pub fn resolve(&self, target: &str) -> Result<&Function> {
         if self
@@ -532,7 +572,7 @@ impl Index {
                 "target is under unresolved cfg/cfg_attr; select unconditional source",
             ));
         }
-        let found: Vec<_> = self.functions.iter().filter(|f| f.id == target).collect();
+        let found = self.matching(target);
         if self
             .macro_modules
             .iter()
