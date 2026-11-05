@@ -120,7 +120,11 @@ pub fn transform(root: &Path, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> 
                 "module destination fingerprint mismatch",
             ));
         }
-        horizon_mixins_core::modules::validate_destination(tree, &module.name)?;
+        // Its glob imports were followed when it was planned, on this same source (the
+        // fingerprints above): only its own names are checked again.
+        horizon_mixins_core::modules::validate_destination_with(tree, &module.name, &mut |_| {
+            false
+        })?;
     }
     for ((file, node), mut patches) in groups {
         // Execution order is global within a function; site grouping happens below.
