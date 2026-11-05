@@ -228,6 +228,44 @@ source="runtime.rs"
     assert_eq!(source::files(&f.root).unwrap(), original);
 }
 #[test]
+fn a_glob_of_a_workspace_module_is_followed_for_the_module_name() {
+    // A glob of a module without the name brings nothing a local module would shadow.
+    let f = fixture();
+    f.append("engine/src/boundary.rs", "\npub use crate::calls::*;\n");
+    assert_eq!(build_plan(&f.root, &f.mods).unwrap().modules.len(), 1);
+    // A crate's root re-exporting another crate (Horizon's client re-exports its split-out
+    // library: `pub use horizon_client_lib::*;`) receives a module the same way.
+    let f = fixture();
+    fs::write(
+        f.root.join("driver/src/lib.rs"),
+        "pub use fixture_game::*;\n",
+    )
+    .unwrap();
+    f.replace(
+        "mods/alpha/horizon-mixin.toml",
+        "engine/src/boundary.rs",
+        "driver/src/lib.rs",
+    );
+    assert_eq!(build_plan(&f.root, &f.mods).unwrap().modules.len(), 1);
+    // The name the glob brings, directly or through the globs of the module it names, clashes,
+    // and the diagnostic names the mod.
+    for (path, text) in [
+        ("engine/src/calls.rs", "\npub mod support {}\n"),
+        ("engine/src/calls.rs", "\npub use crate::entity::*;\n"),
+    ] {
+        let f = fixture();
+        f.append("engine/src/entity.rs", "\npub struct support;\n");
+        f.append(path, text);
+        f.append("engine/src/boundary.rs", "\npub use super::calls::*;\n");
+        let error = build_plan(&f.root, &f.mods).unwrap_err();
+        assert_eq!(
+            (error.code.as_str(), error.mod_id.as_deref()),
+            ("E_MODULE_CONFLICT", Some("alpha")),
+            "{text}"
+        );
+    }
+}
+#[test]
 fn support_module_visibility_rejects_unknown_values() {
     for visibility in [
         "public",
