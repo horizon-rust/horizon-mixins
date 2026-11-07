@@ -633,23 +633,47 @@ impl Index {
         }
     }
 }
+/// The names a function's parameters bind: `self`, each plain parameter and every name a
+/// destructuring pattern such as `(x, z): (f64, f64)` introduces.
 pub fn parameters(sig: &Signature) -> Result<BTreeSet<String>> {
-    sig.inputs
-        .iter()
-        .map(|arg| match arg {
-            FnArg::Receiver(_) => Ok("self".into()),
-            FnArg::Typed(t) => {
-                if let syn::Pat::Ident(i) = &*t.pat {
-                    Ok(i.ident.to_string())
-                } else {
-                    Err(Diagnostic::new(
-                        "E_INVALID_BINDING",
-                        "destructured function parameters are unsupported",
-                    ))
-                }
+    let mut names = BTreeSet::new();
+    for arg in &sig.inputs {
+        match arg {
+            FnArg::Receiver(_) => {
+                names.insert("self".to_owned());
             }
-        })
-        .collect()
+            FnArg::Typed(t) => {
+                names.extend(pattern_bindings(&t.pat)?.into_iter().map(|(name, _)| name));
+            }
+        }
+    }
+    Ok(names)
+}
+/// Each name a pattern binds, with whether the binding is `mut`, in source order. The parts of
+/// a destructured parameter can be named by hooks; the unnamed whole cannot.
+pub fn pattern_bindings(pat: &syn::Pat) -> Result<Vec<(String, bool)>> {
+    struct Bindings(Vec<(String, bool)>, bool);
+    impl<'ast> syn::visit::Visit<'ast> for Bindings {
+        fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+            self.0.push((p.ident.to_string(), p.mutability.is_some()));
+            syn::visit::visit_pat_ident(self, p);
+        }
+        fn visit_pat(&mut self, p: &'ast syn::Pat) {
+            if matches!(p, syn::Pat::Macro(_)) {
+                self.1 = true;
+            }
+            syn::visit::visit_pat(self, p);
+        }
+    }
+    let mut bindings = Bindings(Vec::new(), false);
+    syn::visit::Visit::visit_pat(&mut bindings, pat);
+    if bindings.1 {
+        return Err(Diagnostic::new(
+            "E_INVALID_BINDING",
+            "parameter patterns containing macros are unsupported",
+        ));
+    }
+    Ok(bindings.0)
 }
 
 #[cfg(test)]
