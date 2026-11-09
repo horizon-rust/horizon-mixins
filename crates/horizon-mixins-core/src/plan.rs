@@ -1281,6 +1281,12 @@ impl<'ast> Visit<'ast> for Safety {
             self.error = Some(("E_UNSUPPORTED_MACRO", "signature macros are unsupported"));
             return;
         }
+        if self.macro_depth >= 16 {
+            self.macro_error = Some(crate::standard_macros::fail(
+                "macro invocations are nested too deeply to validate",
+            ));
+            return;
+        }
         match self.policy.parse(mac) {
             Ok(args) => {
                 self.macro_depth += 1;

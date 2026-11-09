@@ -34,6 +34,35 @@ as `::std::vec!` avoids ordinary local name shadowing; Cargo dependencies
 named/renamed `std`, `core` or `alloc`, renamed roots in `extern crate`, and opaque ancestor item
 expansions, still cause rejection. No dependency is added to make a path resolve.
 
+## Local `macro_rules!` macros
+
+A bare invocation of a `macro_rules!` macro defined in the same crate is accepted
+under the same conditions, so a function that calls a helper macro such as
+`world_items!(self)` can take a body-rewriting hook. Like the standard macros,
+the invocation is preserved verbatim; the planner expands it only to validate it.
+It substitutes the arguments into the first matching rule and checks the result
+like any other macro input: hidden exits, closures and `?` fail with
+`E_UNSUPPORTED_MACRO`, and a selector or selected variable that occurs in the
+expansion or in an argument fails with `E_UNSUPPORTED_MACRO_SITE`.
+
+The macro must be provably the one Rust resolves:
+
+- Exactly one `macro_rules!` of that name exists in the target's module chain, and it
+  is defined textually before the target (before the target's item in the same module,
+  or before the `mod` item leading to it in an ancestor module).
+- No item macro invocation or `#[macro_use]` appears in that chain, because either could
+  define or reorder textual macros.
+- The invocation is a bare name, not a path such as `crate::name!`.
+
+Only a small subset of `macro_rules!` is understood. Matchers are flat sequences of
+literal tokens and `ident`, `expr`, `tt`, `literal`, `ty` or `path` fragments; the
+transcriber must expand to a single expression. Repetitions, nested matcher groups,
+other fragment kinds, statements, `let` bindings and nested macro definitions are
+rejected instead of guessed. `$crate` becomes `crate`; `expr` arguments keep their
+precedence. Expansions are checked at the invocation site's scope only, so a macro
+whose meaning depends on hygiene or on names declared next to its definition should
+be checked with `check`.
+
 ## Rejected inputs and hidden sites
 
 - Inputs containing `return`, `?`, `break`, `continue`, closures, async/await,
