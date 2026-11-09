@@ -384,7 +384,7 @@ fn negative_planning_diagnostics_are_actionable() {
             "closure",
             "engine/src/calls.rs",
             "let first = consume(next(evaluations, log));",
-            "let _closure = || 1; let first = consume(next(evaluations, log));",
+            "let _closure = async || 1; let first = consume(next(evaluations, log));",
             "E_UNSUPPORTED_CONTROL_FLOW",
         ),
         (
@@ -853,6 +853,9 @@ mod effects;
 
 #[path = "cases/standard_macros.rs"]
 mod standard_macros;
+
+#[path = "cases/local_scope.rs"]
+mod local_scope;
 
 #[path = "cases/native.rs"]
 mod native;

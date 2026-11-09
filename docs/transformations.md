@@ -38,8 +38,10 @@ larger expression. Consequently the selected call must be the complete
 expression of a statement, a plain identifier `let` initializer, or a block or
 function tail (parentheses are allowed). Binary operands, call arguments,
 conditions and match-arm expressions are rejected as `E_UNSUPPORTED_SITE`.
-Reference-wrapped calls, closures/async/await/try/`?`, nested items, unsafe/const
-contexts, cfg and opaque macros fail closed. Parameter shadowing is rejected
+Reference-wrapped calls, async/await/try/`?`, nested items other than plain
+function-local `use` declarations, unsafe/const contexts, cfg and opaque macros fail
+closed; a selected site inside a closure fails closed too, while closures elsewhere
+in the function are left untouched. Parameter shadowing is rejected
 for BEFORE_CALL so bindings cannot silently refer to a different local.
 Compilation remains necessary to validate actual borrowing and return types.
 
