@@ -217,6 +217,41 @@ fn indexes_inline_external_path_inherent_and_trait_methods() {
     f.run("check");
 }
 #[test]
+fn a_crate_answers_to_the_name_it_gives_itself() {
+    let f = Fixture::new();
+    // The crate cargo calls `fixture-game` also names itself `named_engine`, as a split-out
+    // crate does when its code keeps saying `horizon_client::…`.
+    f.append(
+        "engine/src/lib.rs",
+        "\nextern crate self as named_engine;\n",
+    );
+    let index = Index::load(&f.root).unwrap();
+    let real = index
+        .resolve("fixture_game::entity::advance")
+        .unwrap()
+        .id
+        .clone();
+    assert_eq!(real, "fixture_game::entity::advance");
+    for (aliased, behind) in [
+        (
+            "named_engine::entity::advance",
+            "fixture_game::entity::advance",
+        ),
+        (
+            "named_engine::entity::Entity::tick",
+            "fixture_game::entity::Entity::tick",
+        ),
+        (
+            "named_engine::inline::leaf::identity",
+            "fixture_game::inline::leaf::identity",
+        ),
+    ] {
+        assert_eq!(index.resolve(aliased).unwrap().id, behind, "{aliased}");
+    }
+    // A path the crate does not hold is still not found.
+    assert!(index.resolve("named_engine::entity::absent").is_err());
+}
+#[test]
 fn negative_planning_diagnostics_are_actionable() {
     let cases = [
         (

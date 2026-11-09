@@ -23,6 +23,9 @@ pub struct Function {
 }
 #[derive(Debug)]
 pub struct Index {
+    /// A crate's own names (`extern crate self as horizon_client;`) → the cargo target prefix
+    /// its items are indexed under.
+    pub(crate) crate_aliases: BTreeMap<String, BTreeSet<String>>,
     pub(crate) standard_macro_aliases: BTreeMap<String, BTreeSet<String>>,
     pub functions: Vec<Function>,
     pub types: Vec<TypeDefinition>,
@@ -83,13 +86,47 @@ pub(crate) fn cfg_status(attrs: &[Attribute]) -> CfgStatus {
     status
 }
 
+/// The compiler's own crate-level attributes. Written as inner attributes (`#![recursion_limit =
+/// "256"]`) they configure the compilation and expand nothing, so a root module that carries them
+/// is no macro module. Anything that can expand code or bring macros in (`macro_use`, `derive`,
+/// `test`, `proc_macro*`, an attribute macro of a crate) is not here, nor is `no_implicit_prelude`,
+/// which changes what names mean.
+const CRATE_ATTRIBUTES: [&str; 9] = [
+    "recursion_limit",
+    "type_length_limit",
+    "crate_name",
+    "crate_type",
+    "no_std",
+    "no_main",
+    "no_builtins",
+    "windows_subsystem",
+    "feature",
+];
+
+/// An attribute of a tool the compiler knows by name: `rustfmt::skip`, `clippy::too_many_arguments`,
+/// `diagnostic::on_unimplemented`, `rust_analyzer::skip`. They hint to the tool and expand nothing.
+/// Any other path with two segments is another crate's attribute macro.
+fn tool_attribute(path: &syn::Path) -> bool {
+    let names: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    path.leading_colon.is_none()
+        && match names.as_slice() {
+            [tool, name] if tool == "rust_analyzer" => name == "skip",
+            [tool, _, ..] => matches!(tool.as_str(), "rustfmt" | "clippy" | "diagnostic"),
+            _ => false,
+        }
+}
+
+/// Whether `attrs` hold an attribute that may expand code, so what the item holds cannot be
+/// trusted to be what is written. Only attributes known to expand nothing pass.
 pub fn macro_attributes(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| {
         let Some(name) = a.path().get_ident() else {
-            return true;
+            return !tool_attribute(a.path());
         };
-        !matches!(
-            name.to_string().as_str(),
+        let name = name.to_string();
+        let inner = matches!(a.style, syn::AttrStyle::Inner(_));
+        !(matches!(
+            name.as_str(),
             "doc"
                 | "cfg"
                 | "cfg_attr"
@@ -104,12 +141,16 @@ pub fn macro_attributes(attrs: &[Attribute]) -> bool {
                 | "must_use"
                 | "deprecated"
                 | "track_caller"
-        )
+        ) || (inner && CRATE_ATTRIBUTES.contains(&name.as_str())))
     })
 }
 
 impl Index {
     pub fn load(root: &Path) -> Result<Self> {
+        // Cargo canonicalizes what it reports (`\\?\C:\…` on Windows, a resolved junction on
+        // macOS), so the root is compared and stripped in the same form.
+        let root = root.canonicalize().map_err(io)?;
+        let root = root.as_path();
         if !root.join("Cargo.lock").is_file() {
             return Err(Diagnostic::new(
                 "E_UNPINNED",
@@ -153,6 +194,7 @@ impl Index {
             }
         }
         let mut index = Self {
+            crate_aliases: BTreeMap::new(),
             standard_macro_aliases: BTreeMap::new(),
             functions: Vec::new(),
             types: Vec::new(),
@@ -482,10 +524,42 @@ impl Index {
                 Item::Macro(_) => {
                     self.macro_modules.insert(prefix.into());
                 }
+                // The crate's own name: a target may be written with it (`extern crate self as
+                // horizon_client;` in a crate cargo calls `horizon-client-lib`).
+                Item::ExternCrate(e) if parent.is_empty() => {
+                    if e.ident == "self"
+                        && let Some((_, name)) = &e.rename
+                    {
+                        self.crate_aliases
+                            .entry(name.to_string())
+                            .or_default()
+                            .insert(prefix.into());
+                    }
+                }
                 _ => {}
             }
         }
         Ok(())
+    }
+    /// The functions a target names. A crate may name itself (`extern crate self as name;`), so
+    /// the same path under that name means the crate's own items when the id itself matches none.
+    fn matching(&self, target: &str) -> Vec<&Function> {
+        let direct: Vec<&Function> = self.functions.iter().filter(|f| f.id == target).collect();
+        if !direct.is_empty() {
+            return direct;
+        }
+        let Some((head, rest)) = target.split_once("::") else {
+            return direct;
+        };
+        let candidates: Vec<String> = self
+            .crate_aliases
+            .get(head)
+            .map(|real| real.iter().map(|r| format!("{r}::{rest}")).collect())
+            .unwrap_or_default();
+        self.functions
+            .iter()
+            .filter(|f| candidates.contains(&f.id))
+            .collect()
     }
     pub fn resolve(&self, target: &str) -> Result<&Function> {
         if self
@@ -498,7 +572,7 @@ impl Index {
                 "target is under unresolved cfg/cfg_attr; select unconditional source",
             ));
         }
-        let found: Vec<_> = self.functions.iter().filter(|f| f.id == target).collect();
+        let found = self.matching(target);
         if self
             .macro_modules
             .iter()
@@ -604,8 +678,80 @@ pub fn pattern_bindings(pat: &syn::Pat) -> Result<Vec<(String, bool)>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CfgStatus, cfg_status};
+    use super::{CfgStatus, cfg_status, macro_attributes};
     use syn::parse_quote;
+
+    fn inner(source: &str) -> Vec<syn::Attribute> {
+        syn::parse_file(source).unwrap().attrs
+    }
+
+    #[test]
+    fn built_in_crate_attributes_expand_nothing_but_only_as_inner_attributes() {
+        for source in [
+            "#![recursion_limit = \"256\"]",
+            "#![type_length_limit = \"1048576\"]",
+            "#![crate_name = \"game\"]",
+            "#![crate_type = \"lib\"]",
+            "#![no_std]",
+            "#![no_main]",
+            "#![no_builtins]",
+            "#![windows_subsystem = \"windows\"]",
+            "#![feature(test)]",
+            "#![allow(dead_code)]
+#![recursion_limit = \"256\"]",
+        ] {
+            assert!(!macro_attributes(&inner(source)), "{source}");
+        }
+        // The known tools' attributes hint to the tool and expand nothing, on any item.
+        let tools: [syn::Attribute; 7] = [
+            parse_quote!(#[rustfmt::skip]),
+            parse_quote!(#[rustfmt::skip::macros(vec)]),
+            parse_quote!(#[clippy::cognitive_complexity = "30"]),
+            parse_quote!(#[clippy::too_many_arguments]),
+            parse_quote!(#[diagnostic::on_unimplemented(message = "no")]),
+            parse_quote!(#[diagnostic::do_not_recommend]),
+            parse_quote!(#[rust_analyzer::skip]),
+        ];
+        for attribute in tools {
+            assert!(
+                !macro_attributes(std::slice::from_ref(&attribute)),
+                "{attribute:?}"
+            );
+        }
+        let others: [syn::Attribute; 6] = [
+            parse_quote!(#[rust_analyzer::other]),
+            parse_quote!(#[serde::something]),
+            parse_quote!(#[tokio::main]),
+            parse_quote!(#[::rustfmt::skip]),
+            parse_quote!(#[::rust_analyzer::skip]),
+            parse_quote!(#[rustfmt_helper::skip]),
+        ];
+        for attribute in others {
+            assert!(macro_attributes(&[attribute]));
+        }
+        // A tool attribute does not hide another one beside it.
+        assert!(macro_attributes(&[
+            parse_quote!(#[rustfmt::skip]),
+            parse_quote!(#[tokio::main]),
+        ]));
+        // Outer, the same names do not configure the crate; they stay refused.
+        assert!(macro_attributes(&[
+            parse_quote!(#[recursion_limit = "256"])
+        ]));
+        assert!(macro_attributes(&[parse_quote!(#[no_std])]));
+        // What can expand code or bring macros in stays refused, among accepted ones too.
+        for source in [
+            "#![macro_use]",
+            "#![no_implicit_prelude]",
+            "#![some_attribute_macro]",
+            "#![tool::attribute]",
+            "#![rustfmt_helper::skip]",
+            "#![recursion_limit = \"256\"]
+#![macro_use]",
+        ] {
+            assert!(macro_attributes(&inner(source)), "{source}");
+        }
+    }
 
     #[test]
     fn production_cfg_recognizes_only_exact_test_predicates() {

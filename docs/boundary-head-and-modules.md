@@ -43,7 +43,15 @@ statement macro invocations, such as `format!`, `matches!`, `vec!`, `assert!`
 and macro-generated early returns. Their tokens remain untouched; no expansion or selection inside them
 is performed. Signature, type, pattern and item macros (including local
 `macro_rules!` definitions), unresolved cfg and attribute macros still fail
-closed. Attributes on macro invocations are checked as usual. Cancelling HEAD
+closed. The compiler's own crate-level attributes written as inner attributes
+(`#![recursion_limit = "256"]`, `type_length_limit`, `crate_name`, `crate_type`,
+`no_std`, `no_main`, `no_builtins`, `windows_subsystem` and `feature`) configure
+the compilation and expand nothing, so a crate root that carries them is not an
+attribute-macro module. Attributes of the tools the compiler knows by name
+(`rustfmt::*`, `clippy::*`, `diagnostic::*` and `rust_analyzer::skip`) hint to the
+tool and expand nothing, so they pass too. `macro_use`, `no_implicit_prelude`,
+`derive`, any other path (`tokio::main`, `serde::...`) and the attribute macros of other
+crates still make a module or item an attribute-macro site. Attributes on macro invocations are checked as usual. Cancelling HEAD
 returns before any original macro or local initializer executes. Async functions
 remain rejected. RETURN and site injections continue to use their stricter control-flow validation, including
 when combined with HEAD. HEAD-only planning does not assign expression/local
@@ -105,13 +113,15 @@ compiles and exercises this arrangement. Public module visibility does not make
 its items or parent modules public. Rust still checks item/type visibility and
 dependency direction; no reverse dependency or cycle is introduced automatically.
 
-The planner conservatively rejects any top-level glob import in a destination
-file with `E_MODULE_CONFLICT`, because it cannot prove which names the glob
-introduces. This includes cfg-gated imports: Horizon's
-`crates/horizon-mods/src/lib.rs` contains `pub use runtime::*;`, so that file
-cannot currently receive a support module, even with `visibility = "pub"`.
-Choose an indexed destination without glob imports whose parent modules are
-public when cross-crate access is needed.
+A top-level glob import in a destination file is followed when it names a module
+the index holds as a file (`crate::…`, `self::…`, `super::…`, a workspace crate, or a
+child module): a local module shadows what a glob brings, so the destination is
+refused with `E_MODULE_CONFLICT` only when that module's top-level items or imports
+(its own globs followed the same way, eight deep) or a support module already
+planned there have the name, whatever cfg the import has. Any other glob
+(`use std::fmt::*;`, an inline module) may bring in anything and is still refused.
+Horizon's client root `crates/horizon-client/src/lib.rs`
+(`pub use horizon_client_lib::*;`) can therefore receive a support module.
 
 It adds no Cargo dependencies or fields to existing structs. IDs are unique
 across injections, bridges and modules in a bundle.
@@ -119,7 +129,8 @@ across injections, bridges and modules in a bundle.
 The destination must have exactly one production source identity. The index treats
 `cfg(not(test))` as active and `cfg(test)` as inactive. Other cfg predicates
 remain unresolved. Existing type/module/import names, competing module names
-and unresolved glob imports are rejected. Payloads are parsed during planning.
+and glob imports that may bring the name are rejected; every diagnostic about a
+module names its mod (`mod_id`). Payloads are parsed during planning.
 External `mod`, `#[path]`, direct include macros, file attributes and shebangs
 are unsupported; assemble multi-file mod implementations into a self-contained
 payload before planning. Ordinary Rust macros and cfg inside new implementation code
