@@ -866,6 +866,9 @@ mod returns;
 #[path = "cases/variables.rs"]
 mod variables;
 
+#[path = "cases/destructured.rs"]
+mod destructured;
+
 #[test]
 fn production_test_cfg_modules_are_indexed_and_applied() {
     let f = Fixture::new();

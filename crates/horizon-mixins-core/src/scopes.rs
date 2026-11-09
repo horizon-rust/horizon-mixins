@@ -119,32 +119,43 @@ impl Scopes {
         let mut scopes = Self::default();
         scopes.frames.push((0, BTreeMap::new()));
         for input in &f.signature.inputs {
-            let (name, ty, mutable) = match input {
+            // A destructured parameter declares each name its pattern binds; their types
+            // are not written anywhere, so captures of them need an explicit type.
+            let declared: Vec<(String, Option<String>, bool)> = match input {
                 syn::FnArg::Typed(arg) => match &*arg.pat {
-                    Pat::Ident(p) => (
+                    Pat::Ident(p) => vec![(
                         p.ident.to_string(),
                         Some(tokens(&arg.ty)),
                         p.mutability.is_some(),
-                    ),
-                    _ => continue,
+                    )],
+                    pat => crate::index::pattern_bindings(pat)
+                        .map(|names| {
+                            names
+                                .into_iter()
+                                .map(|(name, mutable)| (name, None, mutable))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
                 syn::FnArg::Receiver(r) => {
-                    ("self".into(), Some(tokens(&r.ty)), r.mutability.is_some())
+                    vec![("self".into(), Some(tokens(&r.ty)), r.mutability.is_some())]
                 }
             };
-            let id = scopes.locals.len();
-            scopes.locals.push(Local {
-                id,
-                name: name.clone(),
-                ordinal: 0,
-                parameter: true,
-                mutable,
-                supported: true,
-                ty,
-                fingerprint: source::fingerprint(tokens(input)),
-                in_closure: false,
-            });
-            scopes.frames[0].1.insert(name, id);
+            for (name, ty, mutable) in declared {
+                let id = scopes.locals.len();
+                scopes.locals.push(Local {
+                    id,
+                    name: name.clone(),
+                    ordinal: 0,
+                    parameter: true,
+                    mutable,
+                    supported: true,
+                    ty,
+                    fingerprint: source::fingerprint(tokens(input)),
+                    in_closure: false,
+                });
+                scopes.frames[0].1.insert(name, id);
+            }
         }
         scopes.visit_block(&f.block);
         scopes
