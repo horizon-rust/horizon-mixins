@@ -376,46 +376,61 @@ pub fn build_staged(workspace: &Path, mods: &Path) -> Result<(Plan, crate::nativ
             );
         }
         for (module, payload) in bundle.manifest.module.iter().zip(&bundle.modules) {
+            // A module's diagnostics name its mod: their `file` is Horizon's destination.
+            let tag = |mut e: Diagnostic| {
+                e.mod_id
+                    .get_or_insert_with(|| bundle.manifest.info.id.clone().into());
+                e
+            };
             let tree = index.files.get(&module.file).ok_or_else(|| {
-                Diagnostic::new(
+                tag(Diagnostic::new(
                     "E_MODULE",
                     "module destination must be an indexed Rust source file",
                 )
-                .file(&module.file)
+                .file(&module.file))
             })?;
             if index::cfg_status(&tree.attrs) != index::CfgStatus::Active {
-                return Err(Diagnostic::new(
+                return Err(tag(Diagnostic::new(
                     "E_UNSUPPORTED_CFG",
                     "support module destination has unresolved cfg",
-                ));
+                )));
             }
             if index::macro_attributes(&tree.attrs) {
-                return Err(Diagnostic::new(
+                return Err(tag(Diagnostic::new(
                     "E_UNSUPPORTED_MACRO",
                     "support module destination has an attribute macro",
-                ));
+                )));
             }
-            if index
+            let Some(owner) = index
                 .source_owners
                 .get(&module.file)
-                .is_none_or(|owners| owners.len() != 1)
-            {
-                return Err(Diagnostic::new(
+                .filter(|owners| owners.len() == 1)
+                .and_then(|owners| owners.first())
+            else {
+                return Err(tag(Diagnostic::new(
                     "E_TARGET_AMBIGUOUS",
                     "support module destination is reused under multiple source identities",
-                ));
-            }
-            crate::modules::validate_destination(tree, &module.name)?;
+                )));
+            };
+            let planned: Vec<(&str, &str)> = planned_modules
+                .iter()
+                .map(|m| (m.file.as_str(), m.name.as_str()))
+                .collect();
+            crate::modules::validate_destination_with(tree, &module.name, &mut |path| {
+                crate::modules::glob_may_bring(&index, owner, path, &module.name, &planned)
+            })
+            .map_err(|e| tag(e.file(&module.file)))?;
             if planned_modules
                 .iter()
                 .any(|m| m.file == module.file && m.name == module.name)
             {
-                return Err(
-                    Diagnostic::new("E_MODULE_CONFLICT", "competing support modules")
-                        .file(&module.file),
-                );
+                return Err(tag(Diagnostic::new(
+                    "E_MODULE_CONFLICT",
+                    "competing support modules",
+                )
+                .file(&module.file)));
             }
-            crate::modules::validate_payload(payload)?;
+            crate::modules::validate_payload(payload).map_err(tag)?;
             planned_modules.push(PlannedModule {
                 mod_id: bundle.manifest.info.id.clone(),
                 mod_version: bundle.manifest.info.version.clone(),
