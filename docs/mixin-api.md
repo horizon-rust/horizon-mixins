@@ -88,8 +88,27 @@ is expected. Bare method names do not match qualified receiver expressions.
 BEFORE_CALL supports complete expression statements, plain identifier `let`
 initializers and block/function tails. Other placements fail with
 `E_UNSUPPORTED_SITE`. Functions containing opaque macros, unresolved cfg,
-closures, async, await, `?`/try, unsafe/const blocks, nested items or calls under
-references are outside the proven MVP subset. RETURN is narrower: it allows
+async, await, `?`/try, unsafe/const blocks, nested items other than the `use`
+declarations below, or calls under references are outside the proven MVP subset.
+Hooks that rewrite only the site they select (BEFORE_CALL, AFTER_CALL,
+AFTER_ASSIGN, MODIFY_ARG, MODIFY_ARGS, WRAP_OPERATION, MODIFY_CONSTANT and
+MODIFY_EXPRESSION_VALUE) and RETURN also accept:
+
+- plain (not async) closures elsewhere in the function. A selected site inside a
+  closure body is `E_UNSUPPORTED_SITE`, because the closure may run later, elsewhere
+  or never; matches inside closures still count toward `require`. A selected
+  expression that itself contains a closure is accepted only by BEFORE_CALL and
+  AFTER_CALL, which leave it in place; the other hooks would move it into a helper
+  argument.
+- function-local `use` declarations without a visibility or `cfg`, and without a glob.
+  A `use` applies to its whole block, so it is also considered for macro calls that
+  precede it. If it binds a name that the helper source, a binding `ty` or `value`, or
+  `result` also mentions, the generated code would resolve that name differently and
+  planning fails with `E_UNSUPPORTED_SCOPE`.
+
+Placement rules are unchanged: a call such as `values.iter` inside the chain
+`values.iter().map(|x| x + 1)` is still a nested call and BEFORE_CALL still refuses it
+with `E_UNSUPPORTED_SITE`. RETURN is narrower: it allows
 plain closures, and refuses calls under references only inside the values it
 moves (each `return` operand and the function tail); see
 [advanced injections](advanced-injections.md). MODIFY_VARIABLE refuses closures, `?`
