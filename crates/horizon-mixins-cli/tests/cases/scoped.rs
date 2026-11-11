@@ -88,7 +88,7 @@ fn scoped_features_compile_preserve_inputs_and_unchanged_mtimes() {
 fn scoped_source_plan_and_bridge_snapshots_ignore_discovery_order() {
     let f = fixture();
     let plan = build_plan(&f.root, &f.mods).unwrap();
-    assert_eq!(plan.schema, 6);
+    assert_eq!(plan.schema, 7);
     assert_eq!(plan.bridges.len(), 9);
     let captures = &plan
         .injections

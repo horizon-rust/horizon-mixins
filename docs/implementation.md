@@ -200,5 +200,6 @@ a binary data file and a post-build step. The staged workspace passes `cargo tes
 --offline`, so the edited `Cargo.lock` is accepted unchanged. Nine integration tests cover the
 compiled path, unchanged bytes and mtimes (including the crate's files across a helper edit), two
 mods' crates, and every new diagnostic. Applying a crate-carrying bundle to a Horizon `main` export
-(with the #3871 catalog) also produced a stage that `cargo metadata --locked` accepts. The suite has
-89 integration tests. Plans and package version are schema 6 / 0.6.0.
+(with the #3871 catalog) also produced a stage that `cargo metadata --locked` accepts. The 0.6.0
+release had 89 integration tests and schema-6 plans. This checkout adds same-bundle dependency edges
+in schema 7; the Cargo package version remains unchanged until release.

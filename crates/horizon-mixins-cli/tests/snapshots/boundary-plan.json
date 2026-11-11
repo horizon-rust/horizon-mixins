@@ -1,5 +1,5 @@
 {
-  "schema": 6,
+  "schema": 7,
   "transformer": "0.6.0",
   "rustc": "<pinned toolchain>",
   "inputs": {

@@ -16,8 +16,9 @@ Full game and launcher integration remain future work.
 | 6b — Scoped features and bridges | Implemented: lexical local capture, same-block call-bounded slices, GET/GET_MUT/SET/INVOKE APIs, MODIFY_ARGS and MODIFY_VARIABLE STORE/scalar LOAD |
 | 6c — Native consumer | Implemented: lifetime impl method IDs, HEAD over preserved closure/`?` bodies, support modules and a real TOML Veinminer bundle; complete game binary compilation and AST audit |
 | 6d — Effects and state | Implemented: expression results, AFTER_CALL/AFTER_ASSIGN, interior cancellation, explicit per-instance fields/constructors and serde old-data defaults |
-| 6e — Bundle crates, data and named hooks | Implemented (0.6.0): `native-hooks.json` named hooks with versions, bundle crates as workspace members with `Cargo.lock`-only registry dependencies, `data/` staging, `native-post-build.json`; see [crates, data and named hooks](crates-data-and-named-hooks.md) |
-| 6f — Remaining parity | Future: REDIRECT, broader sites/receivers/patterns, arbitrary members/traits, optional groups and semantic matching; see [feature map](spongepowered-feature-gaps.md) |
+| 6e — Bundle crates, data and named hooks | Implemented (0.6.0): `native-hooks.json` named hooks with versions, bundle crates as workspace members with locked registry dependencies, `data/` staging, `native-post-build.json`; see [crates, data and named hooks](crates-data-and-named-hooks.md) |
+| 6f — Same-bundle crate dependencies | Implemented: explicitly declared sibling path edges with forward references, nested roots, path/type validation, deterministic cycle rejection and registry lock preservation; plans use schema 7; see [crates, data and named hooks](crates-data-and-named-hooks.md) |
+| 6g — Remaining parity | Future: REDIRECT, broader sites/receivers/patterns, arbitrary members/traits, optional groups and semantic matching; see [feature map](spongepowered-feature-gaps.md) |
 
 `cargo test --workspace --locked` checks two independent mods, same-site priority
 and ID tie order, original selectors unaffected by injected calls, call results
@@ -36,14 +37,14 @@ a separate change; it is not part of this MVP.
 The advanced fixture adds 38 declarations across two mods and eight runtime
 tests. Integration tests cover cancellation precedence, return exits and Drop,
 argument/constant value chains, FnOnce enforcement, method/self reborrowing,
-combined phases, signature conflicts, invalid sites and deterministic schema-5
+combined phases, signature conflicts, invalid sites and deterministic schema-7
 plans. See [advanced-injections.md](advanced-injections.md) for supported limits.
 
 The scoped fixture adds 25 injections, nine bridges and eight runtime tests
 across two mods. The engine integration tests include lexical declaration
 identity and shadowing, borrowed/owned capture errors, bridge privacy and mutable
 borrows, slice boundaries/counts, argument tuple composition, STORE destruction,
-LOAD-before-STORE order, bridge-only bundles, and deterministic schema-5 plans
+LOAD-before-STORE order, bridge-only bundles, and deterministic schema-7 plans
 and source. See [scopes-and-bridges.md](scopes-and-bridges.md).
 
 The effects fixture adds two independently declared states and twelve hooks,

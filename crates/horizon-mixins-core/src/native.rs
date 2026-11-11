@@ -1,4 +1,4 @@
-//! 0.6.0: named hooks from `native-hooks.json`, bundle crates, bundle data and post-build steps.
+//! Native bundle planning for named hooks, crates/data, and same-bundle dependencies.
 //!
 //! Planning validates everything here against the pristine workspace; [`stage`] then adds the
 //! bundle files to the staged file set and edits the root manifest, the dependents' manifests and
@@ -12,7 +12,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub const CATALOG: &str = "native-hooks.json";
@@ -37,8 +37,18 @@ pub struct PlannedCrate {
     pub dependency_path: String,
     /// The `dependencies` of the crate's `Cargo.lock` entry, as Cargo writes them.
     pub lock_dependencies: Vec<String>,
+    /// Same-bundle path dependencies, resolved to declared crate IDs in manifest/table order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<PlannedCrateDependency>,
     /// File (relative to the crate folder) → SHA-256.
     pub files: BTreeMap<String, String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedCrateDependency {
+    pub table: String,
+    pub key: String,
+    pub target_crate_id: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -283,8 +293,22 @@ pub fn plan(
     for bundle in mods {
         let mod_id = &bundle.manifest.info.id;
         let mut packages_by_crate = BTreeMap::new();
+        let mut records = Vec::new();
+        let mut declared_roots = BTreeMap::new();
+        let mut package_versions = BTreeMap::new();
         for (spec, files) in bundle.manifest.crates.iter().zip(&bundle.crates) {
             let fail = |code: &str, message: String| crate_error(bundle, &spec.id, code, message);
+            let (source_root, source_relative) =
+                checked_crate_root(bundle, spec).map_err(|(code, message)| fail(code, message))?;
+            if let Some(owner) = declared_roots.insert(source_root.clone(), spec.id.clone()) {
+                return Err(fail(
+                    "E_INVALID_PATH",
+                    format!(
+                        "crates '{owner}' and '{}' resolve to the same physical source root",
+                        spec.id
+                    ),
+                ));
+            }
             let info = inspect_crate(files).map_err(|(code, m)| fail(code, m))?;
             let key = normalized(&info.package);
             if let Some(owner) = taken.get(&key) {
@@ -297,6 +321,13 @@ pub fn plan(
                 ));
             }
             taken.insert(key, format!("mod '{mod_id}' crate '{}'", spec.id));
+            package_versions.insert(
+                spec.id.clone(),
+                (
+                    info.package.clone(),
+                    semver::Version::parse(&info.version).expect("inspect_crate validated version"),
+                ),
+            );
             let dependent = spec.dependent();
             let Some(dependent_manifest) = packages.get(dependent) else {
                 return Err(fail(
@@ -324,7 +355,7 @@ pub fn plan(
                 ));
             }
             let mut lock_dependencies = BTreeMap::new();
-            for (name, req) in &info.dependencies {
+            for (name, req) in &info.registry_dependencies {
                 let found = lock
                     .package
                     .iter()
@@ -362,19 +393,91 @@ pub fn plan(
                     .insert(format!("{path}/{name}"), bytes.clone());
             }
             packages_by_crate.insert(spec.id.as_str(), (info.package.clone(), info.bins));
-            planned.crates.push(PlannedCrate {
-                mod_id: mod_id.clone(),
-                crate_id: spec.id.clone(),
-                package: info.package,
-                version: info.version,
-                path,
-                dependent: dependent.to_string(),
-                dependent_manifest: dependent_manifest.clone(),
-                dependency_path,
-                lock_dependencies: lock_dependencies.into_values().collect(),
-                files: fingerprints(files),
+            records.push(CrateRecord {
+                source_relative,
+                path_dependencies: info.path_dependencies,
+                lock_dependencies,
+                planned: PlannedCrate {
+                    mod_id: mod_id.clone(),
+                    crate_id: spec.id.clone(),
+                    package: info.package,
+                    version: info.version,
+                    path,
+                    dependent: dependent.to_string(),
+                    dependent_manifest: dependent_manifest.clone(),
+                    dependency_path,
+                    lock_dependencies: Vec::new(),
+                    dependencies: Vec::new(),
+                    files: fingerprints(files),
+                },
             });
         }
+        for record in &mut records {
+            let bundle_root = bundle.dir.as_ref().ok_or_else(|| {
+                crate_error(
+                    bundle,
+                    "bundle",
+                    "E_CRATE",
+                    "bundle crates need a bundle directory".into(),
+                )
+            })?;
+            let crate_id = record.planned.crate_id.clone();
+            for dependency in &record.path_dependencies {
+                let fail = |message: String| {
+                    crate_error(
+                        bundle,
+                        &crate_id,
+                        "E_CRATE_DEPENDENCY",
+                        format!("[{}] {}: {message}", dependency.table, dependency.key),
+                    )
+                };
+                let target_root =
+                    resolve_sibling_path(bundle_root, &record.source_relative, &dependency.path)
+                        .map_err(fail)?;
+                let Some(target_id) = declared_roots.get(&target_root) else {
+                    return Err(fail(format!(
+                        "path '{}' does not identify another declared crate root in this bundle",
+                        dependency.path
+                    )));
+                };
+                if target_id == &crate_id {
+                    return Err(fail("a crate cannot depend on itself".into()));
+                }
+                let (target_package, target_version) = &package_versions[target_id];
+                let declared_package = dependency.package.as_deref().unwrap_or(&dependency.key);
+                if declared_package != target_package {
+                    return Err(fail(format!(
+                        "path '{}' resolves to crate '{}' with package '{}', but the dependency names package '{}'",
+                        dependency.path, target_id, target_package, declared_package
+                    )));
+                }
+                if let Some(version) = &dependency.version
+                    && !version.matches(target_version)
+                {
+                    return Err(fail(format!(
+                        "path '{}' resolves to package '{}' version {}, which does not match version requirement '{}'",
+                        dependency.path, target_package, target_version, version
+                    )));
+                }
+                let edge = PlannedCrateDependency {
+                    table: dependency.table.clone(),
+                    key: dependency.key.clone(),
+                    target_crate_id: target_id.clone(),
+                };
+                record.lock_dependencies.insert(
+                    (target_package.clone(), target_version.clone()),
+                    target_package.clone(),
+                );
+                record.planned.dependencies.push(edge);
+            }
+            record.planned.lock_dependencies = std::mem::take(&mut record.lock_dependencies)
+                .into_values()
+                .collect();
+        }
+        validate_crate_cycles(&records, bundle)?;
+        planned
+            .crates
+            .extend(records.into_iter().map(|record| record.planned));
         if !bundle.data.is_empty() {
             for (name, bytes) in &bundle.data {
                 planned
@@ -476,13 +579,92 @@ fn dependency_names(doc: &toml_edit::DocumentMut) -> BTreeSet<String> {
     names
 }
 
+struct CrateRecord {
+    source_relative: Vec<String>,
+    path_dependencies: Vec<PathDependency>,
+    lock_dependencies: BTreeMap<(String, semver::Version), String>,
+    planned: PlannedCrate,
+}
+struct PathDependency {
+    table: String,
+    key: String,
+    path: String,
+    package: Option<String>,
+    version: Option<semver::VersionReq>,
+}
 struct CrateInfo {
     package: String,
     version: String,
-    dependencies: Vec<(String, semver::VersionReq)>,
+    registry_dependencies: Vec<(String, semver::VersionReq)>,
+    path_dependencies: Vec<PathDependency>,
     bins: BTreeSet<String>,
 }
 type Invalid = (&'static str, String);
+fn parse_path_dependency(
+    table: &str,
+    key: &str,
+    spec: &toml::Table,
+) -> std::result::Result<PathDependency, Invalid> {
+    let dependency =
+        |message: String| ("E_CRATE_DEPENDENCY", format!("[{table}] {key}: {message}"));
+    if let Some(key) = spec.keys().find(|k| {
+        !matches!(
+            k.as_str(),
+            "path" | "package" | "version" | "features" | "default-features" | "optional"
+        )
+    }) {
+        return Err(dependency(format!(
+            "'{key}' is not allowed for a same-bundle path dependency"
+        )));
+    }
+    let path = spec
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| dependency("'path' must be a string".into()))?;
+    validate_path_syntax(path, true).map_err(dependency)?;
+    let package = match spec.get("package") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| dependency("'package' must be a string".into()))?
+                .to_string(),
+        ),
+    };
+    let version = match spec.get("version") {
+        None => None,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or_else(|| dependency("'version' must be a string".into()))?;
+            Some(
+                semver::VersionReq::parse(text)
+                    .map_err(|e| dependency(format!("version '{text}': {e}")))?,
+            )
+        }
+    };
+    if let Some(features) = spec.get("features") {
+        let features = features
+            .as_array()
+            .ok_or_else(|| dependency("'features' must be an array of strings".into()))?;
+        if features.iter().any(|v| v.as_str().is_none()) {
+            return Err(dependency("'features' must be an array of strings".into()));
+        }
+    }
+    for key in ["default-features", "optional"] {
+        if spec.get(key).is_some_and(|v| v.as_bool().is_none()) {
+            return Err(dependency(format!("'{key}' must be a boolean")));
+        }
+    }
+    Ok(PathDependency {
+        table: table.to_string(),
+        key: key.to_string(),
+        path: path.to_string(),
+        package,
+        version,
+    })
+}
+
 fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<CrateInfo, Invalid> {
     let bad = |m: String| ("E_CRATE", m);
     if files.contains_key("Cargo.lock") {
@@ -578,7 +760,8 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
             }
         }
     }
-    let mut dependencies = Vec::new();
+    let mut registry_dependencies = Vec::new();
+    let mut path_dependencies = Vec::new();
     for kind in DEPENDENCY_TABLES {
         let Some(table) = doc.get(kind) else {
             continue;
@@ -591,6 +774,10 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
             let req = match value {
                 toml::Value::String(req) => req.as_str(),
                 toml::Value::Table(spec) => {
+                    if spec.contains_key("path") {
+                        path_dependencies.push(parse_path_dependency(kind, dep, spec)?);
+                        continue;
+                    }
                     if let Some(key) = spec.keys().find(|k| {
                         !matches!(
                             k.as_str(),
@@ -611,13 +798,14 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
             };
             let req = semver::VersionReq::parse(req)
                 .map_err(|e| dependency(format!("version '{req}': {e}")))?;
-            dependencies.push((dep.clone(), req));
+            registry_dependencies.push((dep.clone(), req));
         }
     }
     Ok(CrateInfo {
         package: name.to_string(),
         version: version.to_string(),
-        dependencies,
+        registry_dependencies,
+        path_dependencies,
         bins,
     })
 }
@@ -626,9 +814,392 @@ fn relative_inside(path: &str) -> std::result::Result<(), String> {
         .map_err(|_| format!("'{path}' must be a relative path inside the crate"))
 }
 
+fn validate_path_syntax(
+    path: &str,
+    allow_parent: bool,
+) -> std::result::Result<Vec<String>, String> {
+    let invalid = || {
+        format!(
+            "'{path}' must be a relative slash-separated path with valid components{}",
+            if allow_parent {
+                " that stays inside the bundle"
+            } else {
+                ""
+            }
+        )
+    };
+    if path.is_empty()
+        || path.contains('\0')
+        || path.contains('\\')
+        || path.starts_with('/')
+        || path
+            .chars()
+            .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return Err(invalid());
+    }
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.iter().any(|part| {
+        part.is_empty()
+            || *part == "."
+            || (!allow_parent && *part == "..")
+            || (*part != ".." && (part.ends_with('.') || part.ends_with(' ')))
+    }) {
+        return Err(invalid());
+    }
+    Ok(parts.into_iter().map(str::to_string).collect())
+}
+
+fn checked_crate_root(
+    bundle: &LoadedMod,
+    spec: &manifest::Crate,
+) -> std::result::Result<(PathBuf, Vec<String>), Invalid> {
+    let parts = validate_path_syntax(&spec.path, false).map_err(|m| ("E_INVALID_PATH", m))?;
+    let Some(bundle_root) = &bundle.dir else {
+        return Err(("E_CRATE", "bundle crates need a bundle directory".into()));
+    };
+    let mut current = bundle_root.clone();
+    for part in &parts {
+        current.push(part);
+        let metadata = std::fs::symlink_metadata(&current).map_err(|e| {
+            (
+                "E_INVALID_PATH",
+                format!("crate root '{}' changed during planning: {e}", spec.path),
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err((
+                "E_INVALID_PATH",
+                format!("crate root '{}' traverses a symlink", spec.path),
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err((
+                "E_CRATE",
+                format!("crate root '{}' is not a directory", spec.path),
+            ));
+        }
+    }
+    let physical = current.canonicalize().map_err(|e| {
+        (
+            "E_INVALID_PATH",
+            format!("cannot resolve crate root '{}': {e}", spec.path),
+        )
+    })?;
+    if !physical.starts_with(bundle_root) {
+        return Err((
+            "E_INVALID_PATH",
+            format!("crate root '{}' escapes its bundle", spec.path),
+        ));
+    }
+    Ok((physical, parts))
+}
+
+fn resolve_sibling_path(
+    bundle_root: &Path,
+    source_root: &[String],
+    path: &str,
+) -> std::result::Result<PathBuf, String> {
+    let parts = validate_path_syntax(path, true)?;
+    let join = |parts: &[String]| {
+        let mut path = bundle_root.to_path_buf();
+        for part in parts {
+            path.push(part);
+        }
+        path
+    };
+    let mut resolved = source_root.to_vec();
+    for part in parts {
+        if part == ".." {
+            if resolved.pop().is_none() {
+                return Err(format!("path '{path}' escapes its bundle"));
+            }
+        } else {
+            resolved.push(part);
+            let traversed = join(&resolved);
+            let metadata = std::fs::symlink_metadata(&traversed)
+                .map_err(|_| format!("path '{path}' does not exist inside its bundle"))?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!("path '{path}' traverses a symlink"));
+            }
+            if !metadata.is_dir() {
+                return Err(format!("path '{path}' traverses a non-directory component"));
+            }
+        }
+    }
+    if resolved.is_empty() {
+        return Err(format!("path '{path}' does not resolve to a crate folder"));
+    }
+    let physical = join(&resolved)
+        .canonicalize()
+        .map_err(|_| format!("path '{path}' does not resolve inside its bundle"))?;
+    if !physical.starts_with(bundle_root) {
+        return Err(format!("path '{path}' escapes its bundle"));
+    }
+    Ok(physical)
+}
+
+fn cycle_chain(crates: &[&PlannedCrate]) -> Option<Vec<String>> {
+    fn visit(
+        at: usize,
+        crates: &[&PlannedCrate],
+        by_id: &BTreeMap<&str, usize>,
+        marks: &mut [u8],
+        stack: &mut Vec<usize>,
+    ) -> Option<Vec<String>> {
+        marks[at] = 1;
+        stack.push(at);
+        for edge in &crates[at].dependencies {
+            let Some(&next) = by_id.get(edge.target_crate_id.as_str()) else {
+                continue;
+            };
+            if marks[next] == 1 {
+                let start = stack.iter().position(|&index| index == next).unwrap();
+                let mut cycle: Vec<_> = stack[start..]
+                    .iter()
+                    .map(|&index| crates[index].crate_id.clone())
+                    .collect();
+                cycle.push(crates[next].crate_id.clone());
+                return Some(cycle);
+            }
+            if marks[next] == 0
+                && let Some(cycle) = visit(next, crates, by_id, marks, stack)
+            {
+                return Some(cycle);
+            }
+        }
+        stack.pop();
+        marks[at] = 2;
+        None
+    }
+
+    let by_id: BTreeMap<_, _> = crates
+        .iter()
+        .enumerate()
+        .map(|(index, c)| (c.crate_id.as_str(), index))
+        .collect();
+    let mut marks = vec![0; crates.len()];
+    let mut stack = Vec::new();
+    for at in 0..crates.len() {
+        if marks[at] == 0
+            && let Some(cycle) = visit(at, crates, &by_id, &mut marks, &mut stack)
+        {
+            return Some(cycle);
+        }
+    }
+    None
+}
+
+fn validate_crate_cycles(records: &[CrateRecord], bundle: &LoadedMod) -> Result<()> {
+    let crates: Vec<_> = records.iter().map(|record| &record.planned).collect();
+    if let Some(cycle) = cycle_chain(&crates) {
+        let first = cycle.first().map(String::as_str).unwrap_or("crate");
+        return Err(crate_error(
+            bundle,
+            first,
+            "E_CRATE_DEPENDENCY",
+            format!("same-bundle crate dependency cycle: {}", cycle.join(" -> ")),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_plan_edges(plan: &Plan) -> Result<()> {
+    let mut by_bundle: BTreeMap<&str, Vec<&PlannedCrate>> = BTreeMap::new();
+    for c in &plan.crates {
+        let expected_path = format!("{CRATES}/{}/{}", c.mod_id, c.crate_id);
+        let depth = Path::new(&c.dependent_manifest)
+            .parent()
+            .map_or(0, |path| path.components().count());
+        let expected_dependency_path = format!("{}{expected_path}", "../".repeat(depth));
+        if !manifest::valid_id(&c.mod_id)
+            || !manifest::valid_id(&c.crate_id)
+            || !manifest::valid_bin(&c.package)
+            || semver::Version::parse(&c.version).is_err()
+            || c.path != expected_path
+            || c.dependency_path != expected_dependency_path
+            || !plan.inputs.contains_key(&c.dependent_manifest)
+        {
+            return Err(Diagnostic::new(
+                "E_PLAN_SITE",
+                format!("invalid planned bundle crate '{}'", c.crate_id),
+            ));
+        }
+        by_bundle.entry(c.mod_id.as_str()).or_default().push(c);
+    }
+    for (mod_id, crates) in by_bundle {
+        let mut by_id = BTreeMap::new();
+        for c in &crates {
+            if by_id.insert(c.crate_id.as_str(), *c).is_some() {
+                return Err(Diagnostic::new("E_PLAN_SITE", "duplicate planned crate ID"));
+            }
+        }
+        for c in &crates {
+            let mut edges = BTreeSet::new();
+            for edge in &c.dependencies {
+                if !DEPENDENCY_TABLES.contains(&edge.table.as_str())
+                    || edge.key.is_empty()
+                    || !edges.insert((edge.table.as_str(), edge.key.as_str()))
+                {
+                    return Err(Diagnostic::new(
+                        "E_PLAN_SITE",
+                        "invalid or duplicate planned crate dependency edge",
+                    ));
+                }
+                let Some(target) = by_id.get(edge.target_crate_id.as_str()) else {
+                    return Err(Diagnostic::new(
+                        "E_PLAN_SITE",
+                        format!(
+                            "planned crate '{}' depends on an undeclared crate in mod '{mod_id}'",
+                            c.crate_id
+                        ),
+                    ));
+                };
+                if target.crate_id.as_str() == c.crate_id.as_str() {
+                    return Err(Diagnostic::new(
+                        "E_PLAN_SITE",
+                        format!("planned crate '{}' depends on itself", c.crate_id),
+                    ));
+                }
+            }
+        }
+        if let Some(cycle) = cycle_chain(&crates) {
+            return Err(Diagnostic::new(
+                "E_PLAN_SITE",
+                format!("same-bundle crate dependency cycle: {}", cycle.join(" -> ")),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn planned_crate_error(c: &PlannedCrate, message: impl Into<String>) -> Diagnostic {
+    let manifest = format!("{}/Cargo.toml", c.path);
+    let mut error = Diagnostic::new("E_CRATE_DEPENDENCY", message.into()).file(manifest);
+    error.mod_id = Some(c.mod_id.clone().into());
+    error.injection_id = Some(c.crate_id.clone().into());
+    error
+}
+
+fn validate_sibling_edges(plan: &Plan, extras: &Extras) -> Result<()> {
+    for source_crate in &plan.crates {
+        let mut expected = BTreeMap::new();
+        for edge in &source_crate.dependencies {
+            expected.insert((edge.table.as_str(), edge.key.as_str()), edge);
+        }
+        let manifest_path = format!("{}/Cargo.toml", source_crate.path);
+        let bytes = extras.get(&manifest_path).ok_or_else(|| {
+            Diagnostic::new("E_STALE_SOURCE", "bundle crate manifest is missing")
+                .file(&manifest_path)
+        })?;
+        let text = std::str::from_utf8(bytes).map_err(|_| {
+            Diagnostic::new("E_CRATE", "Cargo.toml is not UTF-8").file(&manifest_path)
+        })?;
+        let doc: toml::Table = toml::from_str(text)
+            .map_err(|e| Diagnostic::new("E_CRATE", format!("Cargo.toml: {e}")))?;
+        let mut found = BTreeSet::new();
+        for table_name in DEPENDENCY_TABLES {
+            let Some(dependencies) = doc.get(table_name) else {
+                continue;
+            };
+            let dependencies = dependencies.as_table().ok_or_else(|| {
+                planned_crate_error(source_crate, format!("[{table_name}] must be a table"))
+            })?;
+            for (key, value) in dependencies {
+                let Some(spec) = value.as_table() else {
+                    continue;
+                };
+                if !spec.contains_key("path") {
+                    continue;
+                }
+                let dependency = parse_path_dependency(table_name, key, spec)
+                    .map_err(|(_, message)| planned_crate_error(source_crate, message))?;
+                let edge_key = (table_name, key.as_str());
+                let Some(edge) = expected.get(&edge_key) else {
+                    return Err(planned_crate_error(
+                        source_crate,
+                        format!(
+                            "[{table_name}] {key} has a path dependency missing from the resolved plan"
+                        ),
+                    ));
+                };
+                let target = plan
+                    .crates
+                    .iter()
+                    .find(|c| c.mod_id == source_crate.mod_id && c.crate_id == edge.target_crate_id)
+                    .ok_or_else(|| {
+                        planned_crate_error(
+                            source_crate,
+                            format!(
+                                "[{table_name}] {key} targets undeclared crate '{}'",
+                                edge.target_crate_id
+                            ),
+                        )
+                    })?;
+                let declared_package = dependency.package.as_deref().unwrap_or(key);
+                if declared_package != target.package {
+                    return Err(planned_crate_error(
+                        source_crate,
+                        format!(
+                            "[{table_name}] {key} names package '{declared_package}', but planned target '{}' is package '{}'",
+                            target.crate_id, target.package
+                        ),
+                    ));
+                }
+                if let Some(version) = dependency.version {
+                    let target_version = semver::Version::parse(&target.version).map_err(|_| {
+                        planned_crate_error(
+                            source_crate,
+                            format!(
+                                "planned target '{}' has an invalid version",
+                                target.crate_id
+                            ),
+                        )
+                    })?;
+                    if !version.matches(&target_version) {
+                        return Err(planned_crate_error(
+                            source_crate,
+                            format!(
+                                "[{table_name}] {key} version requirement '{version}' does not match target '{}' version {}",
+                                target.crate_id, target.version
+                            ),
+                        ));
+                    }
+                }
+                if !found.insert(edge_key) {
+                    return Err(planned_crate_error(
+                        source_crate,
+                        format!("[{table_name}] {key} repeats a path dependency"),
+                    ));
+                }
+            }
+        }
+        let expected_keys: BTreeSet<_> = expected.keys().copied().collect();
+        if found != expected_keys {
+            let missing: Vec<_> = expected_keys
+                .difference(&found)
+                .map(|(table, key)| format!("[{table}] {key}"))
+                .collect();
+            return Err(planned_crate_error(
+                source_crate,
+                format!(
+                    "resolved path dependencies no longer match Cargo.toml{}",
+                    if missing.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; missing {}", missing.join(", "))
+                    }
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Add the planned bundle files to `files` (the transformed workspace) and edit the manifests
 /// and `Cargo.lock`. Always writes `native-post-build.json`.
 pub fn stage(plan: &Plan, files: &mut BTreeMap<String, Vec<u8>>, extras: Extras) -> Result<()> {
+    plan.validate_structure()?;
     let mut expected = BTreeMap::new();
     for c in &plan.crates {
         for (name, hash) in &c.files {
@@ -650,6 +1221,7 @@ pub fn stage(plan: &Plan, files: &mut BTreeMap<String, Vec<u8>>, extras: Extras)
             "bundle crate or data files changed during planning; retry",
         ));
     }
+    validate_sibling_edges(plan, &extras)?;
     for (name, bytes) in extras {
         source::relative(Path::new(&name))?;
         if files.insert(name.clone(), bytes).is_some() {
@@ -754,6 +1326,63 @@ fn edit_manifests(plan: &Plan, files: &mut BTreeMap<String, Vec<u8>>) -> Result<
             deps.insert(&c.package, toml_edit::value(spec));
         }
         files.insert(name.into(), doc.to_string().into_bytes());
+    }
+    edit_sibling_manifests(plan, files)?;
+    Ok(())
+}
+fn edit_sibling_manifests(plan: &Plan, files: &mut BTreeMap<String, Vec<u8>>) -> Result<()> {
+    for source_crate in &plan.crates {
+        if source_crate.dependencies.is_empty() {
+            continue;
+        }
+        let manifest = format!("{}/Cargo.toml", source_crate.path);
+        let mut doc = parse_manifest(files, &manifest)?;
+        for edge in &source_crate.dependencies {
+            let target = plan
+                .crates
+                .iter()
+                .find(|c| c.mod_id == source_crate.mod_id && c.crate_id == edge.target_crate_id)
+                .ok_or_else(|| {
+                    planned_crate_error(
+                        source_crate,
+                        format!(
+                            "resolved target crate '{}' is missing",
+                            edge.target_crate_id
+                        ),
+                    )
+                })?;
+            let dependency = doc
+                .get_mut(&edge.table)
+                .and_then(|item| item.as_table_like_mut())
+                .and_then(|table| table.get_mut(&edge.key))
+                .ok_or_else(|| {
+                    planned_crate_error(
+                        source_crate,
+                        format!(
+                            "resolved dependency [{}] {} is missing",
+                            edge.table, edge.key
+                        ),
+                    )
+                })?;
+            let path = dependency
+                .as_table_like_mut()
+                .and_then(|spec| spec.get_mut("path"))
+                .and_then(|item| item.as_value_mut())
+                .ok_or_else(|| {
+                    planned_crate_error(
+                        source_crate,
+                        format!(
+                            "resolved dependency [{}] {} has no path value",
+                            edge.table, edge.key
+                        ),
+                    )
+                })?;
+            let decor = path.decor().clone();
+            let mut replacement = toml_edit::Value::from(format!("../{}", target.crate_id));
+            *replacement.decor_mut() = decor;
+            *path = replacement;
+        }
+        files.insert(manifest.clone(), doc.to_string().into_bytes());
     }
     Ok(())
 }
