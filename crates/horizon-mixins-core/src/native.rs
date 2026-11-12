@@ -12,7 +12,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub const CATALOG: &str = "native-hooks.json";
@@ -542,6 +542,8 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
     }
     let mut bins = BTreeSet::new();
     let mut explicit_bins = false;
+    // Files that a `[[bin]]` table claims: Cargo drops the bin it would infer from such a file.
+    let mut claimed = BTreeSet::new();
     for kind in ["lib", "bin", "test", "example", "bench"] {
         let targets: Vec<&toml::Table> = match doc.get(kind) {
             None => Vec::new(),
@@ -555,6 +557,9 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
             }
             if kind == "bin" {
                 explicit_bins = true;
+                if let Some(path) = target.get("path").and_then(|p| p.as_str()) {
+                    claimed.insert(PathBuf::from(path));
+                }
                 if let Some(bin) = target.get("name").and_then(|n| n.as_str()) {
                     bins.insert(bin.to_string());
                 }
@@ -563,7 +568,7 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
     }
     let autobins = package.get("autobins").and_then(|a| a.as_bool()) != Some(false);
     if autobins || !explicit_bins {
-        if files.contains_key("src/main.rs") {
+        if files.contains_key("src/main.rs") && !claimed.contains(Path::new("src/main.rs")) {
             bins.insert(name.to_string());
         }
         for file in files.keys() {
@@ -572,7 +577,9 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
                     .strip_suffix(".rs")
                     .filter(|b| !b.contains('/'))
                     .or_else(|| rest.strip_suffix("/main.rs").filter(|b| !b.contains('/')));
-                if let Some(bin) = bin {
+                if let Some(bin) = bin
+                    && !claimed.contains(Path::new(file))
+                {
                     bins.insert(bin.to_string());
                 }
             }

@@ -144,8 +144,9 @@ args = ["--quick"] # optional, plain strings
 ```
 
 A bin is a `[[bin]] name`, `src/bin/<name>.rs`, `src/bin/<name>/main.rs`, or the package name
-when `src/main.rs` exists. Every stage contains `native-post-build.json`, which is `[]` when no mod
-has a step:
+when `src/main.rs` exists. A `[[bin]]` whose `path` is one of those files replaces the bin that
+Cargo would infer from it: with `path = "src/main.rs"` the package name is not a bin. Every stage
+contains `native-post-build.json`, which is `[]` when no mod has a step:
 
 ```json
 [

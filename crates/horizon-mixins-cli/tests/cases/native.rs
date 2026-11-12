@@ -339,6 +339,39 @@ fn post_build_steps_name_a_bin_of_the_mods_own_crate() {
     assert_eq!(build_plan(&f.root, &f.mods).unwrap().post_build.len(), 1);
 }
 #[test]
+fn a_bin_table_that_claims_an_inferred_file_replaces_the_inferred_bin() {
+    // Cargo drops the bin it would infer from a file that a [[bin]] table claims by path.
+    for (from, to, claimed, inferred) in [
+        (
+            "src/bin/bake.rs",
+            "src/main.rs",
+            "src/main.rs",
+            "boost-engine",
+        ),
+        (
+            "src/bin/bake.rs",
+            "src/bin/other.rs",
+            "src/bin/other.rs",
+            "other",
+        ),
+    ] {
+        let f = fixture();
+        let engine = f.mods.join("boost/engine");
+        fs::create_dir_all(engine.join(to).parent().unwrap()).unwrap();
+        fs::rename(engine.join(from), engine.join(to)).unwrap();
+        let cargo = format!(
+            "{ENGINE}serde_json = \"1\"\n\n[[bin]]\nname = \"bake\"\npath = \"{claimed}\"\n"
+        );
+        fs::write(engine.join("Cargo.toml"), &cargo).unwrap();
+        assert_eq!(build_plan(&f.root, &f.mods).unwrap().post_build.len(), 1);
+        manifest(&f, "boost", |v| {
+            first(v, "post_build").insert("bin".into(), inferred.into());
+        });
+        let e = failure(&f, "E_POST_BUILD");
+        assert!(e.message.contains("it has: bake"), "{e:?}");
+    }
+}
+#[test]
 fn post_build_bins_never_share_a_file_in_the_target_folder() {
     // Two mods' steps both named "bake": one would run the other's program.
     let f = fixture();
