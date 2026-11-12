@@ -197,6 +197,22 @@ fn hook_and_target_are_exclusive() {
     });
     failure(&f, "E_MANIFEST");
 }
+fn engine_with_lib_name(name: &str) -> String {
+    format!("{ENGINE}\n[lib]\nname = \"{name}\"\n")
+}
+#[test]
+fn a_crates_lib_name_must_be_its_package_name_with_underscores() {
+    let f = fixture();
+    engine_manifest(&f, &engine_with_lib_name("boost_engine"));
+    build_plan(&f.root, &f.mods).unwrap();
+    let f = fixture();
+    engine_manifest(&f, &engine_with_lib_name("serde_json"));
+    let e = failure(&f, "E_CRATE");
+    assert!(
+        e.message.contains("'serde_json' must be 'boost_engine'"),
+        "{e:?}"
+    );
+}
 #[test]
 fn bundle_crates_must_stay_inside_horizons_workspace_and_lock() {
     for (text, code) in [

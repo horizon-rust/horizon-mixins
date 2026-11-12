@@ -553,6 +553,18 @@ fn inspect_crate(files: &BTreeMap<String, Vec<u8>>) -> std::result::Result<Crate
             if let Some(path) = target.get("path").and_then(|p| p.as_str()) {
                 relative_inside(path).map_err(|m| bad(format!("[{kind}] path: {m}")))?;
             }
+            if kind == "lib"
+                && let Some(lib) = target.get("name").and_then(|n| n.as_str())
+            {
+                // The dependent calls the crate by its package name, so another name would
+                // only fail later with `cannot find module or crate`.
+                let expected = name.replace('-', "_");
+                if lib != expected {
+                    return Err(bad(format!(
+                        "[lib] name '{lib}' must be '{expected}', the package name with '-' replaced by '_'"
+                    )));
+                }
+            }
             if kind == "bin" {
                 explicit_bins = true;
                 if let Some(bin) = target.get("name").and_then(|n| n.as_str()) {
