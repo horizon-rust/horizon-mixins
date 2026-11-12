@@ -497,3 +497,54 @@ fn a_crlf_checkout_stages_and_builds() {
         "the lock keeps CRLF"
     );
 }
+fn backslash_error(f: &Fixture, field: &str, value: &str) {
+    let e = failure(f, "E_INVALID_PATH");
+    assert!(
+        e.message.contains(field) && e.message.contains(value) && e.message.contains("'/'"),
+        "{e:?}"
+    );
+    assert!(e.file.as_deref().unwrap().ends_with("horizon-mixin.toml"));
+}
+#[test]
+fn manifest_paths_with_a_backslash_are_refused_naming_the_field() {
+    // The mod works on Windows (`\` separates there) and would only break for others.
+    let f = fixture();
+    let bundle = f.mods.join("boost");
+    fs::create_dir(bundle.join("hooks")).unwrap();
+    fs::copy(bundle.join("tick.rs"), bundle.join("hooks/tick.rs")).unwrap();
+    manifest(&f, "boost", |v| {
+        first(v, "injection").insert("helper".into(), r"hooks\tick.rs".into());
+    });
+    backslash_error(&f, "helper", r"hooks\tick.rs");
+    let f = fixture();
+    let bundle = f.mods.join("boost");
+    fs::create_dir(bundle.join("mods")).unwrap();
+    fs::rename(bundle.join("engine"), bundle.join("mods/engine")).unwrap();
+    manifest(&f, "boost", |v| {
+        first(v, "crate").insert("path".into(), r"mods\engine".into());
+    });
+    backslash_error(&f, "[[crate]] path", r"mods\engine");
+    for (file, source, field, value) in [
+        (
+            r"game\src\extra.rs",
+            "tick.rs",
+            "[[module]] file",
+            r"game\src\extra.rs",
+        ),
+        (
+            "game/src/extra.rs",
+            r"hooks\extra.rs",
+            "[[module]] source",
+            r"hooks\extra.rs",
+        ),
+    ] {
+        let f = fixture();
+        f.append(
+            "mods/boost/horizon-mixin.toml",
+            &format!(
+                "\n[[module]]\nid = \"extra\"\nfile = '{file}'\nname = \"extra\"\nsource = '{source}'\n"
+            ),
+        );
+        backslash_error(&f, field, value);
+    }
+}
