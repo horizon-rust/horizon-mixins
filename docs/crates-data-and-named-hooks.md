@@ -107,6 +107,8 @@ Rejected, with `E_CRATE`:
   dependency tables;
 - `package.workspace`, a non-literal `package.version`, and `package.build` or target `path`s that
   leave the crate;
+- a `[lib] name` other than the package name with `-` replaced by `_` (the dependent calls the crate
+  by that name);
 - a package name (with `-` and `_` treated alike) that is already a workspace member, any package in
   `Cargo.lock`, another mod's crate, or a dependency name of the dependent;
 - a `dependent` that is not a workspace member package. The message lists the members.
