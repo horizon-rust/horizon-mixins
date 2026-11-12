@@ -272,6 +272,7 @@ pub fn load(root: &Path) -> Result<Vec<LoadedMod>> {
         let manifest: Manifest = toml::from_str(&text)
             .map_err(|e| Diagnostic::new("E_MANIFEST", e.to_string()).file(&path))?;
         let fail = |code: &str, message: String| Diagnostic::new(code, message).file(&path);
+        let fail_path = |message: String| fail("E_INVALID_PATH", message);
         if !valid_id(&manifest.info.id)
             || manifest.info.version.is_empty()
             || (manifest.injection.is_empty()
@@ -313,6 +314,8 @@ pub fn load(root: &Path) -> Result<Vec<LoadedMod>> {
                     format!("invalid or duplicate module id '{}'", module.id),
                 ));
             }
+            forward_slashes("[[module]] file", &module.file).map_err(&fail_path)?;
+            forward_slashes("[[module]] source", &module.source).map_err(&fail_path)?;
             source::relative(Path::new(&module.file))?;
             syn::parse_str::<syn::Ident>(&module.name)
                 .map_err(|e| fail("E_MODULE", e.to_string()))?;
@@ -425,6 +428,8 @@ pub fn load(root: &Path) -> Result<Vec<LoadedMod>> {
                     "slices apply only to site injections".into(),
                 )));
             }
+            forward_slashes("helper", &injection.helper)
+                .map_err(|m| context(Diagnostic::new("E_INVALID_PATH", m)))?;
             let helper_path =
                 source::contained(path.parent().unwrap(), Path::new(&injection.helper))
                     .map_err(context)?;
@@ -453,6 +458,8 @@ pub fn load(root: &Path) -> Result<Vec<LoadedMod>> {
                     "[[crate]] needs a bundle directory with horizon-mixin.toml",
                 )));
             };
+            forward_slashes("[[crate]] path", &spec.path)
+                .map_err(|m| context(Diagnostic::new("E_INVALID_PATH", m)))?;
             source::relative(Path::new(&spec.path)).map_err(context)?;
             if Path::new(&spec.path).starts_with("data") {
                 return Err(context(Diagnostic::new(
@@ -520,6 +527,16 @@ pub fn load(root: &Path) -> Result<Vec<LoadedMod>> {
     }
     mods.sort_by(|a, b| a.manifest.info.id.cmp(&b.manifest.info.id));
     Ok(mods)
+}
+/// A path written in a manifest uses `/`. A `\` separates components on Windows only, so the same
+/// bundle would work for its author and fail for others.
+fn forward_slashes(field: &str, value: &str) -> std::result::Result<(), String> {
+    if value.contains('\\') {
+        return Err(format!(
+            "{field} '{value}' contains '\\'; use '/' as the path separator"
+        ));
+    }
+    Ok(())
 }
 /// Cargo target names: an ASCII letter or `_`, then letters, digits, `_` or `-`.
 pub(crate) fn valid_bin(value: &str) -> bool {

@@ -65,6 +65,10 @@ path = "engine"               # bundle-relative folder holding Cargo.toml
 dependent = "native-game"     # workspace package that depends on it (default "horizon-client")
 ```
 
+A manifest path (this `path`, a `helper`, a `[[module]]` `file` or `source`) is written with `/`. A `\` in
+one is `E_INVALID_PATH`, naming the field: it separates components on Windows only, so the mod would
+work for its author and fail for others.
+
 The folder's files are copied to `native-crates/<mod-id>/<crate-id>/`. `target/`, `.git/`, `.local/`
 and `node_modules/` inside it are skipped, as in the workspace. The stage then:
 
