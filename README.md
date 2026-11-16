@@ -1,12 +1,38 @@
 # horizon-mixins
 
-A working stable-Rust CLI for deterministic, build-time source mixins for
-[Horizon](https://github.com/ludovic111/horizon). The MVP implements declarative
+A stable-Rust CLI for deterministic, build-time source mixins for
+[Horizon](https://github.com/horizon-rust/horizon). It implements declarative
 TOML mods, HEAD and interior cancellation, BEFORE_CALL, AFTER_CALL, AFTER_ASSIGN,
 MODIFY_EXPRESSION_VALUE, RETURN, MODIFY_ARG,
 MODIFY_ARGS, MODIFY_CONSTANT, MODIFY_VARIABLE, WRAP_OPERATION, OVERWRITE,
 lexical local capture, slices, accessor/invoker bridges, per-instance state, JSON planning and atomic
 Linux staging. Native mods run with your user privileges.
+
+## Horizon integration and tool delivery
+
+Horizon supports [`[[native.mixin]]`](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/native-route/2-mixins.md):
+the launcher copies only targeted functions from the exact game's source, applies mixins to those copies, and
+compiles a function-replacement library against that game's signed, exact-build SDK. The game crates are not
+rebuilt per mod. Normal hooks, Parts and `[[inject]]` listeners use the shared native/wasm API; source-level
+mixins remain a supported, native-only mechanism where those hooks do not suffice.
+
+Use the `mixins` revision pinned by the game's SDK/template, not this repository's moving main branch.
+The launcher applies its carried `tools/mixins/narrow-reference-rule.patch` to that exact tool source. Where no
+matching tool prebuilt exists, it builds the **tool** from source once per pin, patch and platform; this is not a
+full-game rebuild or a fallback for an unavailable game SDK. Existing matching tool prebuilts are checked for
+their release checksum and source/patch/platform identity. The former unsigned prebuilt-tool publishing workflow
+is not enabled; do not infer published availability from this README.
+
+Engine maintainers exercise source delivery with `horizon-launcher native-build --mixins-from-source` and the
+engine's `tools/ci/fn_replace_check.sh` canary using its exact candidate SDK. Native SDK hosts currently cover
+Linux x86-64 client/server, Windows x86-64 GNU client and macOS ARM64 client. Publication remains gated by review
+and exact-head CI; an older Nightly may not have an SDK.
+
+## Standalone tool development
+
+The fixture workflow below tests this tool in a tiny standalone workspace. Its `check` command compiling that
+fixture is not Horizon's production mod installation route:
+
 
 ```text
 Pristine Cargo workspace + independent mod bundles
@@ -69,10 +95,10 @@ fn head(entity: &mut Entity) {
 }
 ```
 
-Helpers use explicit typed parameter bindings. They are compiled in the game
-crate and introduce no game→mod→game Cargo cycle. All selectors resolve on the
-original AST; same-site hooks run by priority descending, mod ID ascending,
-then injection ID ascending. An OVERWRITE conflicts with every other hook on
+In standalone stages, helpers use explicit typed parameter bindings and compile locally in the staged crate,
+without a game→mod→game Cargo cycle. Horizon instead compiles targeted copies into a replacement library against
+the exact prebuilt game. All selectors resolve on the original AST; same-site hooks run by priority descending,
+mod ID ascending, then injection ID ascending. An OVERWRITE conflicts with every other hook on
 its function.
 
 BEFORE_CALL requires an exact syntax selector, explicit total `require`, and
@@ -128,7 +154,7 @@ An isolated test against the complete `horizon-core` crate from commit
 HEAD hooks in `jmath::atan`. Reproduce it using your local clone:
 
 ```sh
-python3 tools/horizon_prototype.py --horizon /home/levzzz/Documents/horizon
+python3 tools/horizon_prototype.py --horizon /path/to/horizon-checkout
 ```
 
 It exports committed crate sources into a fresh `target/horizon-prototype`,
@@ -140,8 +166,8 @@ Further documentation: [API](docs/mixin-api.md),
 [transformations](docs/transformations.md), [architecture](docs/architecture.md),
 [staging and cache](docs/build-and-cache.md), [security](docs/security.md),
 [roadmap](docs/roadmap.md), [feasibility and measurements](docs/implementation.md).
-Additional injection kinds, broader structural mixins, launcher integration, semantic
-resolution, and a complete executable cache remain future work. License: [MIT](LICENSE).
+Broader structural mixins and semantic resolution remain outside the supported contract; see the pinned
+revision's diagnostics and Horizon's native-route docs for production limits. License: [MIT](LICENSE).
 
 Version 0.4.0 supports lifetime-bearing impl methods, HEAD over preserved
 closure/`?` bodies, and declarative same-crate support modules.
